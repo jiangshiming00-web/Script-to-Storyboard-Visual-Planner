@@ -32,9 +32,14 @@ two checks:
    real runtime defects (e.g. secret leak in newly added exit
    surfaces) that static shape + artifact existence cannot.
 
-The runner does NOT execute the agent and does NOT trigger any
-write actions. It is purely a static + live cross-check harness so
-the scenario files stay accurate as the artifact schema evolves.
+The runner does NOT trigger any write actions (it reads the
+generated run dir and invokes the read-only ``planner agent
+diagnose|review-run|review-batch`` CLI; ``--write-report`` is
+never used by the runner so the harness can never pollute the
+caller's repo). The replay is purely a defensive cross-check
+harness so the scenario files stay accurate as the agent evolves.
+
+Run as::
 
 Run as::
 
