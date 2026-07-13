@@ -1,0 +1,15 @@
+{
+  "env": "development",
+  "allow_overwrite_runs": true,
+  "executor_default_status": "pending",
+  "submit_paid_jobs": false,
+  "log_level": "DEBUG",
+  "executor_dry_run": true,
+  "data_root": "data/development",
+  "assets_root": "assets/development",
+  "runs_root": "runs/development",
+  "logs_root": "logs/development",
+  "schema_strict": false,
+  "planner_provider": "deterministic",
+  "allow_provider_fallback": true
+}

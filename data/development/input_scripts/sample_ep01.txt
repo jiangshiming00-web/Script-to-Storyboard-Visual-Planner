@@ -1,0 +1,81 @@
+# EP01：林夏的合同
+# 这是一段用于 Phase-1 骨架测试的示例剧本。
+# 格式约定：
+#   - [meta:kind id] 段落用于给出人物/场景/道具的稳定设定
+#   - EPxx_Syy 开头为场景标题
+#   - 中文冒号 ":" / 半角冒号 ":" 引出对白
+#   - [BEAT: 描述] 标记剧情节拍
+
+[meta:character lin_xia]
+name: 林夏
+role: 女主
+age: 26
+identity: 职场新人
+appearance: 清瘦，鹅蛋脸，黑色锁骨发
+wardrobe: 白色衬衫，浅灰西装外套，细银项链
+temperament: 克制、敏感、倔强
+positive: 26岁中国女性，黑色锁骨发，鹅蛋脸，清瘦身形
+negative: 不要夸张妆容，不要网红脸，不要古装，不要卡通
+continuity: 同一集默认白色衬衫和浅灰西装外套 | 发型保持黑色锁骨发
+
+[meta:character chen_mo]
+name: 陈默
+role: 男主
+age: 29
+identity: 前男友
+appearance: 高瘦，方脸，黑色短发，戴金属细框眼镜
+wardrobe: 深蓝衬衫，黑色西裤
+temperament: 冷静、克制、心机
+positive: 29岁中国男性，黑色短发，方脸，金属细框眼镜
+negative: 不要阳光少年，不要运动装，不要卡通
+continuity: 同集保持深蓝衬衫和黑色西裤 | 不换发型
+
+[meta:location office_night]
+name: 夜晚办公室
+type: interior
+time: night
+layout: 现代开放式办公室，玻璃会议室，窗外城市霓虹
+lighting: 冷白顶灯，局部屏幕光
+mood: 压抑、紧张、安静
+positive: 现代开放式办公室，夜晚，冷白顶灯，玻璃会议室，城市霓虹背景
+negative: 不要古装，不要豪门客厅，不要卡通画风
+continuity: 办公桌、玻璃会议室和窗外霓虹保持一致
+
+[meta:location street_rain]
+name: 雨夜街道
+type: exterior
+time: night
+layout: 城市街道，湿漉漉的路面，霓虹倒影
+lighting: 路灯与霓虹，雨雾
+mood: 孤寂、悬疑
+positive: 雨夜城市街道，霓虹倒影在湿漉漉的路面，路灯冷光
+negative: 不要古装街景，不要阳光天气
+continuity: 同一街道场景保持霓虹色调
+
+[meta:prop blue_contract_folder]
+name: 蓝色合同文件夹
+visual: 深蓝色文件夹，里面是股权转让合同，白色合同纸，签名页清晰
+function: 揭示背叛的关键证据
+positive: 深蓝色文件夹，白色合同纸，签名页清晰
+negative: 不要牛皮纸袋，不要红色文件夹，不要卡通
+continuity: 出现时始终是深蓝色文件夹
+
+[meta:relationship lin_xia->chen_mo]
+label: 前男友
+
+EP01_S01 夜晚办公室
+林夏 在办公室加班，桌上摆着蓝色合同文件夹。
+林夏：（叹气）这份合同……难道真的被篡改了？
+陈默：（推门进入）林夏，你还在加班？
+林夏：（头也不抬）你不是已经签了吗。
+陈默：……我知道你不会原谅我。
+[BEAT: 冲突揭示]
+林夏：（猛地抬头）陈默，你为什么要伪造签名？
+
+EP01_S02 雨夜街道
+林夏 冲出办公室，蓝色合同文件夹紧紧抱在胸口。
+雨点打在脸上，她深吸一口气。
+陈默：（追出来）林夏，等等。
+林夏：（没有回头）你该解释的不是我。
+[BEAT: 高潮对峙]
+陈默：我只是想留住我们。

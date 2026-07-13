@@ -1,0 +1,46 @@
+# EP03：街道上的背影
+# v1.0 验收样例 · 第三集
+# 与 EP01/EP02 共享 lin_xia / chen_mo / street_rain
+
+[meta:character lin_xia]
+name: 林夏
+role: 女主
+age: 26
+identity: 职场新人
+appearance: 清瘦，鹅蛋脸，黑色锁骨发
+wardrobe: 白色衬衫，浅灰西装外套，细银项链
+positive: 26岁中国女性，黑色锁骨发，鹅蛋脸，清瘦身形
+negative: 不要夸张妆容，不要网红脸，不要古装，不要卡通
+
+[meta:character chen_mo]
+name: 陈默
+role: 男主
+age: 29
+identity: 前男友
+appearance: 高瘦，方脸，黑色短发，戴金属细框眼镜
+wardrobe: 深蓝衬衫，黑色西裤
+positive: 29岁中国男性，黑色短发，方脸，金属细框眼镜
+negative: 不要阳光少年，不要卡通
+
+[meta:location street_rain]
+name: 雨夜街道
+type: exterior
+time: night
+layout: 城市街道，湿漉漉的路面，霓虹倒影
+positive: 雨夜城市街道，霓虹倒影在湿漉漉的路面，路灯冷光
+negative: 不要古装街景，不要阳光天气
+
+[meta:prop blue_contract_folder]
+name: 蓝色合同文件夹
+visual: 深蓝色文件夹，白色合同纸，签名页清晰
+positive: 深蓝色文件夹，白色合同纸，签名页清晰
+negative: 不要牛皮纸袋，不要红色文件夹
+
+EP03_S01 雨夜街道
+林夏 走在空旷的街道，蓝色合同文件夹抱在胸前。
+雨雾在路灯下散开。
+陈默：（远处站在屋檐下）林夏！
+林夏：（脚步一顿，没有回头）
+[BEAT: 释怀]
+林夏：（轻声自语）这次，我要走完这段路。
+陈默：（目送她走远）

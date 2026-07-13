@@ -1,0 +1,48 @@
+# EP02：周姐的咖啡
+# v1.0 验收样例 · 第二集
+# 与 EP01 共享 lin_xia / zhou_jie / office_night
+
+[meta:character lin_xia]
+name: 林夏
+role: 女主
+age: 26
+identity: 职场新人
+appearance: 清瘦，鹅蛋脸，黑色锁骨发
+wardrobe: 白色衬衫，浅灰西装外套，细银项链
+positive: 26岁中国女性，黑色锁骨发，鹅蛋脸，清瘦身形
+negative: 不要夸张妆容，不要网红脸，不要古装，不要卡通
+continuity: 同前集
+
+[meta:character zhou_jie]
+name: 周姐
+role: 配角 / 上司
+age: 38
+identity: 部门总监
+appearance: 中等身材，短发，干练
+wardrobe: 深灰西装外套，白衬衫
+positive: 38岁中国女性，短发，干练，深灰西装外套
+negative: 不要温柔人设，不要卡通画风
+
+[meta:location office_night]
+name: 夜晚办公室
+type: interior
+time: night
+layout: 现代开放式办公室，玻璃会议室，窗外城市霓虹
+positive: 现代开放式办公室，夜晚，冷白顶灯，玻璃会议室，城市霓虹背景
+negative: 不要古装，不要豪门客厅，不要卡通画风
+
+[meta:prop paper_cup_coffee]
+name: 一次性纸杯咖啡
+visual: 白纸杯，杯身印有公司 logo，杯口冒热气
+function: 周姐递给林夏的安慰道具
+positive: 白纸杯，印有公司 logo，杯口冒热气
+negative: 不要马克杯，不要塑料杯
+
+EP02_S01 夜晚办公室
+林夏 坐在工位前发呆，蓝色合同文件夹被压在键盘下。
+周姐：（端着纸杯咖啡走过来）林夏，喝点热的。
+林夏：（接过纸杯）周姐，我是不是该把合同交出去？
+周姐：先想清楚你愿意承担什么后果。
+[BEAT: 内心权衡]
+林夏：如果交给董事会，他会坐牢的。
+周姐：那是他该承担的，不是你。

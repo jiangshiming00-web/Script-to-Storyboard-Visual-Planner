@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Script-to-Storyboard Visual Planner</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Script-to-Storyboard</h1>
+    <nav class="env-tabs" role="tablist" aria-label="Environment">
+      <button id="env-development" class="env-tab" type="button" role="tab" aria-selected="true">development</button>
+      <button id="env-production" class="env-tab" type="button" role="tab" aria-selected="false">production</button>
+    </nav>
+    <div class="env-warning" id="env-warning" hidden>
+      <strong>production</strong> - runs go outside the repo and never overwrite existing runs.
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT COLUMN: controls -->
+    <section class="panel" id="panel-controls" aria-labelledby="panel-controls-heading">
+      <h2 id="panel-controls-heading">Run</h2>
+
+      <!-- Model settings -->
+      <details class="group" open>
+        <summary>Model settings</summary>
+        <p class="hint">API keys are read from the named environment variable. The key value never leaves this machine.</p>
+        <label>Provider
+          <select id="provider-select">
+            <option value="deterministic">deterministic</option>
+            <option value="openai_compatible">openai_compatible (recommended for v1.0)</option>
+            <option value="openai">openai (skeleton - not implemented)</option>
+            <option value="anthropic">anthropic (skeleton - not implemented)</option>
+          </select>
+        </label>
+        <label>Model <input type="text" id="model-name" placeholder="gpt-4o-mini" /></label>
+        <label>Base URL <input type="text" id="base-url" placeholder="https://api.openai.com/v1" /></label>
+        <label>API key env var <input type="text" id="api-key-env" placeholder="OPENAI_API_KEY" /></label>
+        <label class="row">
+          <input type="checkbox" id="enable-real-calls" />
+          <span>Enable real model calls (off by default)</span>
+        </label>
+        <label class="row">
+          <input type="checkbox" id="allow-fallback" />
+          <span>Allow fallback to deterministic (development only)</span>
+        </label>
+        <div class="button-row">
+          <button type="button" id="save-model-config-btn">Save model config</button>
+          <button type="button" id="probe-btn" class="secondary" disabled title="Coming in v1.1 - opt-in probe design is tracked in HANDOFF.md">Probe (v1.1)</button>
+        </div>
+        <p class="hint" id="model-config-status">Model config not loaded yet.</p>
+      </details>
+
+      <!-- Script selection -->
+      <details class="group" open>
+        <summary>Script</summary>
+        <label>Upload (.txt)
+          <input type="file" id="upload-input" accept=".txt,text/plain" />
+        </label>
+        <p class="hint" id="upload-status">No file uploaded.</p>
+        <label>Or pick an existing script
+          <input type="text" id="script-path" placeholder="/absolute/path/to/script.txt" />
+        </label>
+        <label>Output directory (optional)
+          <input type="text" id="out-dir" placeholder="/tmp/storyboard-out" />
+        </label>
+        <label>Batch scripts dir (optional)
+          <input type="text" id="batch-scripts-dir" placeholder="/path/to/scripts-dir" />
+        </label>
+        <div class="button-row">
+          <button type="button" id="run-btn">Run single episode</button>
+          <button type="button" id="batch-btn" class="secondary">Run batch</button>
+        </div>
+      </details>
+    </section>
+
+    <!-- RIGHT COLUMN: history + drawer -->
+    <section class="panel" id="panel-runs" aria-labelledby="panel-runs-heading">
+      <h2 id="panel-runs-heading">Run history</h2>
+      <div class="run-list" id="run-list" aria-live="polite">
+        <p class="hint">No runs yet.</p>
+      </div>
+
+      <aside class="drawer" id="run-drawer" hidden aria-labelledby="drawer-heading">
+        <header>
+          <h3 id="drawer-heading">Run detail</h3>
+          <button type="button" id="drawer-close" aria-label="Close">×</button>
+        </header>
+        <div class="drawer-body" id="drawer-body"></div>
+      </aside>
+    </section>
+  </main>
+
+  <!-- Toast / error region: red-line "no traceback, only human text". -->
+  <div class="toast-region" id="toast-region" aria-live="polite"></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

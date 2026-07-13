@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "script-to-storyboard-planner"
+version = "0.1.0"
+description = "Local planner that converts a short drama script into visual production JSON artifacts."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Proma Agent" }]
+dependencies = [
+    "pydantic>=2,<3",
+    "click>=8,<9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "jsonschema>=4,<5",
+    "httpx>=0.27,<1",  # FastAPI TestClient backend for the web tests.
+]
+gui = [
+    # Desktop GUI shell: FastAPI + Uvicorn + pywebview native window.
+    # Installed only when teammates want `planner-web`; the base
+    # install (pydantic + click) still resolves without these.
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
+    "pywebview>=5,<6",
+    "python-multipart>=0.0.9",
+]
+server = [
+    # Headless server (no pywebview): for users who prefer to open
+    # the UI in their own browser instead of a native window.
+    "fastapi>=0.110,<1",
+    "uvicorn>=0.27,<1",
+    "python-multipart>=0.0.9",
+]
+build = [
+    # PyInstaller for packaging .app / .exe bundles. CI-only.
+    "pyinstaller>=6,<7",
+]
+executor = [
+    # Reserved for Phase 3+ executor implementations.
+]
+
+[project.scripts]
+planner = "planner.cli:main"
+planner-web = "planner.web.scripts_entry:main"
+
+[tool.setuptools.packages.find]
+include = ["planner*"]
+
+# Bundled static UI for the planner-web desktop / browser shell.
+# The directory will be added in Phase 3; declaring it now keeps the
+# wheel packaging correct from the first v1.0 release onward and stops
+# silent regressions where a freshly installed wheel cannot serve /.
+[tool.setuptools.package-data]
+"planner.web" = ["static/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q"

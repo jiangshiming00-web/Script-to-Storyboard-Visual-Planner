@@ -1,0 +1,15 @@
+{
+  "env": "production",
+  "allow_overwrite_runs": false,
+  "executor_default_status": "pending_manual_approval",
+  "submit_paid_jobs": false,
+  "log_level": "INFO",
+  "executor_dry_run": true,
+  "data_root": "data/production",
+  "assets_root": "assets/production",
+  "runs_root": "runs/production",
+  "logs_root": "logs/production",
+  "schema_strict": true,
+  "planner_provider": "deterministic",
+  "allow_provider_fallback": false
+}
