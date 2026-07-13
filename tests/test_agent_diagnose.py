@@ -465,7 +465,68 @@ def test_build_not_implemented_report_has_empty_tool_invocations() -> None:
     assert codes == ["not_implemented_in_p1"]
 
 
+def test_build_not_implemented_report_has_explicit_production_env() -> None:
+    """P3-4 fix: stub reports set ``env="production"`` explicitly so
+    the ``--write-report`` policy's run_env fallback is transparent
+    (the operator sees why a stub report inside the repo is refused).
+    """
+    rep = build_not_implemented_report(kind="review-batch", target="/tmp/x")
+    assert rep.env == "production"
+
+
 # ---------- Internal helpers ----------
+
+
+def test_translate_validate_report_substring_routing() -> None:
+    """P3-1/2/3 fix: pin the current substring-based mapping so a
+    future ``validate_run`` message change cannot silently flip a
+    dev warning into a "production_fallback_used" error code.
+
+    The contract:
+
+    * errors[] containing "fallback" -> production_fallback_used
+    * errors[] containing "source_path" -> script_source_mismatch
+    * other errors[] -> validate_ref_error
+    * warnings[] containing "env=" or "env mismatch" -> env_mismatch
+    * other warnings[] (including the real "missing fallback_used
+      flag" warning that contains the word "fallback") ->
+      validate_ref_warning, NOT production_fallback_used.
+    """
+    from planner.agent.diagnose import _translate_validate_report
+    from planner.agent.diagnose import DiagnoseFinding, ValidationSummary
+
+    # Real-world warning from planner/validate.py:92-98 — contains
+    # "fallback" but is in warnings[], not errors[].
+    summary = ValidationSummary(
+        ok=True,
+        errors=[],
+        warnings=[
+            "run_summary.json missing fallback_used flag; the run "
+            "predates the fallback design.",
+        ],
+    )
+    findings: list[DiagnoseFinding] = []
+    _translate_validate_report(summary, findings)
+    assert len(findings) == 1
+    assert findings[0].code == "validate_ref_warning"
+    assert findings[0].severity == "warning"
+
+    # Real-world error from planner/validate.py:73-79 (production+fallback)
+    summary2 = ValidationSummary(
+        ok=False,
+        errors=[
+            "Production run used provider fallback "
+            "('openai_compatible' -> 'deterministic', reason=None); "
+            "production must remain fail-closed and never silently "
+            "swap providers."
+        ],
+        warnings=[],
+    )
+    findings2: list[DiagnoseFinding] = []
+    _translate_validate_report(summary2, findings2)
+    assert len(findings2) == 1
+    assert findings2[0].code == "production_fallback_used"
+    assert findings2[0].severity == "error"
 
 
 def _copy_real_pipeline_artifacts(run_dir: Path, scripts_dir: Path, tmp_path: Path) -> None:

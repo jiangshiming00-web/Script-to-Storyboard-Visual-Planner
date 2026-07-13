@@ -102,3 +102,43 @@ def test_validate_run_tool_delegates_to_validate_run(
     result = validate_run_tool(tmp_path, expected_env="development")
     assert result.ok is True
     assert called["with"] == (tmp_path, "development")
+
+
+def test_tool_artifact_map_synced_with_harness() -> None:
+    """P3-6 fix: lock the keys + structure of TOOL_ARTIFACT_MAP to
+    the harness ``_TOOL_ARTIFACT_MAP`` so a future PR that adds a
+    7th tool can't drift one side without the other.
+
+    The reviewer convention (`planner/agent/tools.py` docstring)
+    requires PR authors to touch both files; this test makes the
+    invariant CI-enforced.
+    """
+    import ast
+    import re
+
+    # Read the harness map via ast.literal_eval (the map is a plain
+    # dict literal so this is safe).
+    harness_path = (
+        Path(__file__).resolve().parent.parent
+        / "harness"
+        / "agent_scenarios"
+        / "run_all.py"
+    )
+    src = harness_path.read_text(encoding="utf-8")
+    m = re.search(r"_TOOL_ARTIFACT_MAP\s*=\s*(\{.*?\n\})", src, re.S)
+    assert m is not None, "_TOOL_ARTIFACT_MAP literal not found in harness"
+    harness_map = ast.literal_eval(m.group(1))
+
+    assert set(harness_map.keys()) == set(TOOL_ARTIFACT_MAP.keys()), (
+        f"TOOL_ARTIFACT_MAP drift between planner/agent/tools.py "
+        f"({sorted(TOOL_ARTIFACT_MAP.keys())}) and "
+        f"harness/agent_scenarios/run_all.py "
+        f"({sorted(harness_map.keys())})"
+    )
+    # Also check that each key's value list matches.
+    for k in harness_map:
+        assert sorted(harness_map[k]) == sorted(TOOL_ARTIFACT_MAP[k]), (
+            f"TOOL_ARTIFACT_MAP[{k!r}] drift: "
+            f"planner={TOOL_ARTIFACT_MAP[k]} vs "
+            f"harness={harness_map[k]}"
+        )

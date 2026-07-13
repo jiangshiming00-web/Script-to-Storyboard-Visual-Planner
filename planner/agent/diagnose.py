@@ -46,7 +46,7 @@ from planner.exceptions import ScriptReadError
 from planner.validate import validate_run as _validate_run
 
 from .redact import redact_secrets_text
-from .tools import list_artifacts as _tools_list_artifacts
+from .tools import list_artifacts as _tools_list_artifacts, read_run_summary
 
 # ---------- Pydantic models ----------
 
@@ -211,11 +211,26 @@ def _translate_validate_report(
 
     Mapping (Phase 3 P1 minimum stable codes):
 
-    * ``production_fallback_used``  -- error mentioning "fallback"
-    * ``script_source_mismatch``    -- error mentioning "source_path"
-    * ``validate_ref_error``        -- any other error
-    * ``env_mismatch``               -- warning mentioning "env="
-    * ``validate_ref_warning``      -- any other warning
+    * ``production_fallback_used``  -- errors[] mentioning "fallback"
+    * ``script_source_mismatch``    -- errors[] mentioning "source_path"
+    * ``validate_ref_error``        -- any other errors[] entry
+    * ``env_mismatch``               -- warnings[] mentioning "env="
+      or "env mismatch"
+    * ``validate_ref_warning``      -- any other warnings[] entry
+
+    Note on substring fragility: this mapping is a Phase 3 P1 stub.
+    A future ``validate_run`` error message containing the literal
+    "fallback" in a non-production-fallback context (e.g. "missing
+    fallback_used flag" — which already exists in
+    ``planner/validate.py:92-98`` as a WARNING) would normally be
+    mis-routed, but because the matcher only runs on the ``errors[]``
+    list (production is the only context where ``fallback_used=True``
+    becomes an error in ``planner/validate.py:73-79``), the actual
+    runtime behavior is correct. Pinned by
+    ``test_translate_validate_report_substring_routing`` in
+    ``tests/test_agent_diagnose.py``. Phase 3 P2 may replace this
+    with structured fields on ``ValidationReport`` if validate_run
+    grows more error categories.
     """
     for err in report_summary.errors:
         err_lower = err.lower()
@@ -579,8 +594,6 @@ def diagnose_run_dir(
     )
 
     # ----- Step 0: load run_summary.json (R10 / R11) -----
-    from .tools import read_run_summary  # local import to avoid cycle
-
     try:
         summary = read_run_summary(run_dir)
     except KeyError as exc:
@@ -847,12 +860,18 @@ def build_not_implemented_report(
       detect "this command did nothing",
     * records an EMPTY ``tool_invocations`` list — the stub
       must NOT pretend to have read anything.
+    * sets ``env="production"`` by default so the
+      ``--write-report`` policy's run_env fallback (``cli.py``)
+      doesn't surprise the operator with a silent rc=2 refusal
+      on a stub that never read anything. The CLI emits an
+      explicit stderr INFO documenting the default.
 
     Returned object is suitable for both stdout JSON and
     ``--write-report`` paths.
     """
     return DiagnoseReport(
         run_dir=target,
+        env="production",  # explicit so write-report policy is transparent
         implementation_status="not_implemented",
         summary=(
             f"agent {kind} 尚未在 Phase 3 P1 实现；"

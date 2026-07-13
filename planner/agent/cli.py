@@ -287,6 +287,17 @@ def review_run_cmd(
         ),
         err=True,
     )
+    # Explicit about why a stub report has env="production" by default:
+    # the write-report policy treats unknown env as production (fail-closed).
+    click.echo(
+        click.style(
+            "INFO: stub report env defaults to 'production' for "
+            "--write-report policy transparency; override by editing "
+            "the JSON if needed.",
+            fg="cyan",
+        ),
+        err=True,
+    )
     sys.exit(0)
 
 
@@ -331,6 +342,15 @@ def review_batch_cmd(
             "\nNOTE: planner agent review-batch 尚未在 Phase 3 P1 实现；"
             "如需跨集诊断请用 `planner agent diagnose <episode-run-dir>` 逐集跑。",
             fg="yellow",
+        ),
+        err=True,
+    )
+    click.echo(
+        click.style(
+            "INFO: stub report env defaults to 'production' for "
+            "--write-report policy transparency; override by editing "
+            "the JSON if needed.",
+            fg="cyan",
         ),
         err=True,
     )
