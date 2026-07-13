@@ -658,10 +658,19 @@ def diagnose_run_dir(
     health_records: Dict[str, HealthRecord] = {}
     for name, h in provider_health_raw.items():
         if isinstance(h, dict):
+            # P1 fix: redact every text field copied from the artifact
+            # before it reaches the report. ``reason`` and every
+            # ``details`` value can contain leaked tokens if a future
+            # provider emits them (the existing skeleton adapters don't,
+            # but defense in depth is mandatory for the agent output
+            # surface — the same rationale as redact on findings).
             health_records[name] = HealthRecord(
                 healthy=bool(h.get("healthy")),
-                reason=h.get("reason"),
-                details={k: str(v) for k, v in (h.get("details") or {}).items()},
+                reason=_safe_text(h.get("reason")),
+                details={
+                    k: redact_secrets_text(str(v))
+                    for k, v in (h.get("details") or {}).items()
+                },
             )
     runtime_raw = summary.get("provider_runtime")
     runtime_summary: Optional[ProviderRuntimeSummary] = None
@@ -676,7 +685,7 @@ def diagnose_run_dir(
         requested=summary.get("requested_provider"),
         effective=summary.get("effective_provider"),
         fallback_used=summary.get("fallback_used"),
-        fallback_reason=summary.get("fallback_reason"),
+        fallback_reason=_safe_text(summary.get("fallback_reason")),
         health=health_records,
         runtime=runtime_summary,
     )
@@ -739,8 +748,8 @@ def diagnose_run_dir(
         vrep = _validate_run(run_dir, expected_env=expected_env)
         report.validation = ValidationSummary(
             ok=bool(vrep.ok),
-            errors=list(vrep.errors),
-            warnings=list(vrep.warnings),
+            errors=[_safe_text(e) for e in vrep.errors],
+            warnings=[_safe_text(w) for w in vrep.warnings],
             stats=dict(vrep.stats),
         )
         report.tool_invocations.append(
@@ -829,14 +838,16 @@ def _build_summary_zh(report: DiagnoseReport) -> str:
     for f in report.findings:
         if f.code == "production_fallback_used":
             lines.append(
-                "⚠ production run 触发了 provider fallback；这是红线违规，请立即人工复核。"
+                "[RED LINE] production run 触发了 provider fallback；"
+                "这是红线违规，请立即人工复核。"
             )
             break
     # Highlight hardcoded tool
     for f in report.findings:
         if f.code == "executor_tool_hardcoded":
             lines.append(
-                "⚠ executor_tasks.json 中检测到硬编码 tool 字段；违反核心 planner 不写死 executor 工具的红线。"
+                "[RED LINE] executor_tasks.json 中检测到硬编码 tool 字段；"
+                "违反核心 planner 不写死 executor 工具的红线。"
             )
             break
 

@@ -474,6 +474,121 @@ def test_build_not_implemented_report_has_explicit_production_env() -> None:
     assert rep.env == "production"
 
 
+# ---------- P1 fix: redact fallback_reason + provider_health fields ----------
+
+
+def test_provider_fallback_reason_is_redacted_in_report(tmp_path: Path) -> None:
+    """P1 fix (Codex manual review): ``provider.fallback_reason`` is
+    a free-form string copied from run_summary.json. If the upstream
+    run leaked a token into the reason (a real risk for any
+    provider that interpolates the request body into the error),
+    the agent MUST redact it before the value reaches the report
+    JSON / --write-report file / Markdown renderer.
+    """
+    secret_bearer = "Bearer eyJhbGciOiJIUzI1NiJ9-real-secret-12345678"
+    secret_sk = "sk-proj-abcdefghij-real-secret-12345678"
+    run_dir = _make_minimal_run(
+        tmp_path,
+        env="development",
+        requested_provider="openai_compatible",
+        effective_provider="deterministic",
+        fallback_used=True,
+        fallback_reason=f"upstream returned {secret_bearer} "
+        f"and api_key={secret_sk}",
+    )
+    report = diagnose_run_dir(run_dir)
+    serialized = json.dumps(report.model_dump(mode="json"))
+    assert secret_bearer not in serialized
+    assert secret_sk not in serialized
+    # And the redacted substring should appear in fallback_reason.
+    assert "<redacted>" in (report.provider.fallback_reason or "")
+
+
+def test_provider_health_reason_and_details_are_redacted_in_report(
+    tmp_path: Path,
+) -> None:
+    """P1 fix: ``provider.health[*].reason`` and ``.details[*]`` are
+    also free-form text copied from run_summary. Redact both.
+    """
+    secret = "sk-ant-api03-real-secret-12345678"
+    run_dir = _make_minimal_run(
+        tmp_path,
+        provider_health={
+            "anthropic": {
+                "name": "anthropic",
+                "healthy": False,
+                "reason": f"missing key: {secret}",
+                "details": {
+                    "implemented": "false",
+                    "api_key_env_value": secret,
+                    "phase": "1-skeleton",
+                },
+            }
+        },
+    )
+    report = diagnose_run_dir(run_dir)
+    serialized = json.dumps(report.model_dump(mode="json"))
+    assert secret not in serialized
+    # Verify both reason and details are redacted (not just the
+    # binary healthy flag).
+    anthro_record = report.provider.health.get("anthropic")
+    assert anthro_record is not None
+    assert secret not in (anthro_record.reason or "")
+    assert secret not in (anthro_record.details.get("api_key_env_value") or "")
+
+
+def test_validation_errors_warnings_are_redacted_in_report(tmp_path: Path) -> None:
+    """P1 fix: ``validation.errors`` / ``validation.warnings`` are
+    copied from ``validate.validate_run`` output and may include
+    the original ``fallback_reason`` in the error message
+    (``planner/validate.py:73-79``). Redact these fields too.
+    """
+    secret = "Bearer token-real-secret-12345678"
+    # Inject a secret into fallback_reason; validate_run will quote
+    # it in the production-fallback error if env=production +
+    # fallback_used=True. We don't run pipeline here; instead craft a
+    # minimal run with the right shape and patch validate_run to
+    # return an error containing the secret.
+    run_dir = _make_minimal_run(
+        tmp_path,
+        env="production",
+        executor_status="pending_manual_approval",
+        requested_provider="openai_compatible",
+        effective_provider="deterministic",
+        fallback_used=True,
+        fallback_reason=secret,
+    )
+    # Patch validate_run to return an error embedding the secret.
+    from planner import validate as validate_mod
+
+    def fake_validate(run_dir, *, expected_env=None):
+        from planner.validate import ValidationReport
+
+        return ValidationReport(
+            ok=False,
+            errors=[
+                f"Production run used provider fallback ({secret}) — "
+                "fail-closed contract violated."
+            ],
+        )
+
+    original = validate_mod.validate_run
+    validate_mod.validate_run = fake_validate
+    try:
+        report = diagnose_run_dir(run_dir)
+    finally:
+        validate_mod.validate_run = original
+
+    serialized = json.dumps(report.model_dump(mode="json"))
+    assert secret not in serialized
+    # And the validation summary itself was redacted.
+    for err in report.validation.errors:
+        assert secret not in err
+    for warn in report.validation.warnings:
+        # warn list may be empty for this fixture; guard anyway.
+        assert secret not in warn
+
+
 # ---------- Internal helpers ----------
 
 

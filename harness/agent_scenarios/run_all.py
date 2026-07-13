@@ -194,6 +194,207 @@ _TOOL_ARTIFACT_MAP = {
 }
 
 
+def _run_planner_agent_cli(
+    *args: str, cwd: Path, env: Dict[str, str]
+) -> "subprocess.CompletedProcess[str]":
+    """Run ``python3 -m planner agent ...`` and return the completed
+    process. Used by :func:`validate_live_agent_replay` to assert
+    the product agent actually behaves per scenario.
+    """
+    return subprocess.run(
+        [PYTHON, "-m", "planner", "agent", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        env=env,
+        timeout=180,
+    )
+
+
+def validate_live_agent_replay(
+    name: str,
+    scenario: dict,
+    sample_run_dir: Path,
+    sample_batch_dir: Path,
+) -> None:
+    """P2 fix (Codex manual review): the harness used to only verify
+    that the scenario's declared tools would have the right artifacts
+    available; it never actually invoked the product agent. Now that
+    ``planner agent diagnose`` is implemented, the diagnose / review
+    scenarios should run the real CLI and assert the output.
+
+    Coverage matrix (Phase 3 P1.5):
+
+    * ``diagnose_*`` scenarios: run ``planner agent diagnose
+      <sample_run_dir>`` on a fresh dev run; assert exit code 0,
+      stdout JSON is valid, ``implementation_status="full"``,
+      and (for ``diagnose_secret_redaction``) the stdout / the
+      ``--write-report`` file / the stderr contain NO raw secret
+      tokens.
+    * ``review_prompt_refs`` / ``batch_continuity``: run the stub
+      command (``review-run`` / ``review-batch``) and assert exit
+      code 0, ``implementation_status="not_implemented"``, and
+      ``tool_invocations=[]``.
+    * ``approval_required_write``: shape-only (already gated by
+      :func:`validate_approval_gate_shape`).
+    """
+    cat = scenario["category"]
+    scrubbed = _scrubbed_env()
+    # ------------------------------------------------------------------
+    # diagnose_* scenarios: real ``planner agent diagnose`` on a fresh
+    # dev run. The dev run is healthy so all 13 rules should pass
+    # (no findings); we mainly check the CLI surface + JSON shape.
+    # ------------------------------------------------------------------
+    if cat == "diagnose":
+        if "secret_redaction" in name:
+            # Inject a fake secret into fallback_reason + a couple
+            # of provider_health detail fields, then run diagnose
+            # and assert the secret is redacted in stdout + in the
+            # --write-report file. This is the P2 replay that
+            # catches the P1 secret-leak defect.
+            secret = "Bearer eyJhbGciOiJIUzI1NiJ9-fake-secret-replay-12345678"
+            other = "sk-proj-replay-fake-secret-12345678"
+            modified_dir = sample_run_dir.parent / (
+                sample_run_dir.name + "_with_secrets"
+            )
+            shutil.copytree(sample_run_dir, modified_dir)
+            summary_path = modified_dir / "run_summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["fallback_reason"] = f"upstream returned {secret} key={other}"
+            summary["fallback_used"] = True
+            summary["requested_provider"] = "openai_compatible"
+            summary["effective_provider"] = "deterministic"
+            summary["provider_health"] = {
+                "openai_compatible": {
+                    "name": "openai_compatible",
+                    "healthy": False,
+                    "reason": f"missing api_key {other}",
+                    "details": {"phase": "1", "leaked_token": secret},
+                }
+            }
+            summary_path.write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            target_dir = modified_dir
+        else:
+            target_dir = sample_run_dir
+
+        # CLI run #1: stdout JSON, no --write-report.
+        proc = _run_planner_agent_cli(
+            "diagnose", str(target_dir), cwd=PROJECT_ROOT, env=scrubbed
+        )
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: real diagnose CLI "
+                f"failed (rc={proc.returncode}); stderr={proc.stderr}"
+            )
+        try:
+            stdout_payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: real diagnose CLI "
+                f"returned non-JSON stdout: {proc.stdout[:500]} ({exc})"
+            )
+        if stdout_payload.get("implementation_status") != "full":
+            raise SystemExit(
+                f"[agent_scenarios] {name}: expected implementation_status"
+                f"='full', got {stdout_payload.get('implementation_status')!r}"
+            )
+
+        if "secret_redaction" in name:
+            # Secret must NOT appear anywhere in stdout.
+            for needle in (secret, other):
+                if needle in proc.stdout:
+                    raise SystemExit(
+                        f"[agent_scenarios] {name}: secret leaked into "
+                        f"diagnose stdout (needle={needle!r})"
+                    )
+            # CLI run #2: --write-report, verify file content too.
+            report_path = (
+                target_dir.parent / "diagnose_secret_redaction_report.json"
+            )
+            if report_path.exists():
+                report_path.unlink()
+            proc2 = _run_planner_agent_cli(
+                "diagnose",
+                str(target_dir),
+                "--write-report",
+                str(report_path),
+                cwd=PROJECT_ROOT,
+                env=scrubbed,
+            )
+            if proc2.returncode != 0:
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: --write-report run failed "
+                    f"(rc={proc2.returncode}); stderr={proc2.stderr}"
+                )
+            try:
+                file_content = report_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: cannot read --write-report "
+                    f"file {report_path}: {exc}"
+                )
+            for needle in (secret, other):
+                if needle in file_content:
+                    raise SystemExit(
+                        f"[agent_scenarios] {name}: secret leaked into "
+                        f"--write-report file (needle={needle!r})"
+                    )
+                if needle in proc2.stderr:
+                    raise SystemExit(
+                        f"[agent_scenarios] {name}: secret leaked into "
+                        f"diagnose stderr (needle={needle!r})"
+                    )
+            # cleanup
+            report_path.unlink(missing_ok=True)
+            shutil.rmtree(modified_dir, ignore_errors=True)
+        _log(f"{name}: live agent replay ok (diagnose stdout JSON valid)")
+        return
+
+    # ------------------------------------------------------------------
+    # review_* scenarios (Phase 3 P1 stubs): run the stub command
+    # and assert it does no real work.
+    # ------------------------------------------------------------------
+    if cat == "review":
+        if "batch_continuity" in name:
+            target = sample_batch_dir
+            sub = "review-batch"
+        else:
+            target = sample_run_dir
+            sub = "review-run"
+        proc = _run_planner_agent_cli(sub, str(target), cwd=PROJECT_ROOT, env=scrubbed)
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: stub {sub} CLI "
+                f"failed (rc={proc.returncode}); stderr={proc.stderr}"
+            )
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: stub {sub} CLI returned "
+                f"non-JSON stdout: {proc.stdout[:500]} ({exc})"
+            )
+        if payload.get("implementation_status") != "not_implemented":
+            raise SystemExit(
+                f"[agent_scenarios] {name}: stub {sub} expected "
+                f"implementation_status='not_implemented', got "
+                f"{payload.get('implementation_status')!r}"
+            )
+        if payload.get("tool_invocations") != []:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: stub {sub} must have empty "
+                f"tool_invocations, got {payload.get('tool_invocations')!r}"
+            )
+        _log(f"{name}: live agent replay ok (stub {sub} rc=0 + not_implemented)")
+        return
+
+    # approval_gate: shape-only check is sufficient.
+    _log(f"{name}: live agent replay skipped (category={cat!r})")
+
+
 def validate_live_cross_check(
     name: str,
     scenario: dict,
@@ -343,6 +544,13 @@ def main() -> int:
         for name, scenario in scenarios.items():
             if scenario["category"] in {"diagnose", "review"}:
                 validate_live_cross_check(
+                    name, scenario, sample_run_dir, sample_batch_dir,
+                )
+                # P2 fix: also replay the real agent CLI and assert
+                # output. This catches real runtime defects that
+                # static shape + artifact existence cannot (e.g. the
+                # P1 secret-leak in provider.fallback_reason).
+                validate_live_agent_replay(
                     name, scenario, sample_run_dir, sample_batch_dir,
                 )
     except SystemExit:

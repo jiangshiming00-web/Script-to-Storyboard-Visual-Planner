@@ -2,6 +2,86 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-13 (Proma Phase 3 P1.5 — Codex 手工复审 4 findings 修齐)
+
+### Background
+
+按 `agent-roles.md` 顶部（2026-07-13 强化版）的双层结构，用户（shiming jiang）作为 Codex 手工对手方对 Phase 3 P1 做了**手动 Codex 复审**（不在 Proma 内部、用 Codex 工具直接对代码 + scenario + 项目状态扫描），命中 4 findings（1 P1 红线 + 1 P2 + 2 P3）。本轮全部按"本轮顺手补"原则处理（含 P1 必修），交付用户第二次手工 Codex 复审前一次性补齐。
+
+### Findings → Fixes
+
+#### P1 (红线)：Agent 报告 secret redact 不完整
+
+**Bug**: `planner/agent/diagnose.py:679` 直接复制 `summary.get("fallback_reason")` 到 `provider.fallback_reason`，没走 `redact_secrets_text`。`HealthRecord.reason` / `HealthRecord.details` value / `ValidationSummary.errors` / `ValidationSummary.warnings` 同样直接复制。`--write-report` 写的 dict 含这些字段，stderr 打印这些字段——所有出口都泄漏 secret。
+
+**Fix**: 5 处 redact 全部到位：
+- `planner/agent/diagnose.py` `ProviderSummary(fallback_reason=_safe_text(...))`
+- `planner/agent/diagnose.py` `HealthRecord(reason=_safe_text(...), details={k: redact_secrets_text(str(v)) ...})`
+- `planner/agent/diagnose.py` `ValidationSummary(errors=[_safe_text(e) ...], warnings=[_safe_text(w) ...])`
+
+**Tests**（3 个新 test 钉住 behavior）：
+- `tests/test_agent_diagnose.py::test_provider_fallback_reason_is_redacted_in_report`
+- `tests/test_agent_diagnose.py::test_provider_health_reason_and_details_are_redacted_in_report`
+- `tests/test_agent_diagnose.py::test_validation_errors_warnings_are_redacted_in_report`
+
+每个 test 注入 fake Bearer + sk- secret，断言 serialized report 不含 raw secret。
+
+#### P2：Harness scenarios 不真跑 agent CLI
+
+**Bug**: `harness/agent_scenarios/run_all.py:16` 明确说"does not call into an agent"，只 cross-check artifact 存在性。所以 `diagnose_secret_redaction.json` 通过了，但实际 agent 在 `provider.fallback_reason` 泄漏 secret。
+
+**Fix**: 新增 `validate_live_agent_replay()` 函数（`harness/agent_scenarios/run_all.py:204-340`）：
+- 对每个 `diagnose_*` scenario：跑 `python -m planner agent diagnose <sample_run_dir>`，断言 exit code 0 + stdout JSON 合法 + `implementation_status="full"`
+- 对 `diagnose_secret_redaction` 特殊处理：注入 `Bearer eyJ...` 到 `fallback_reason` + `sk-proj-...` 到 `provider_health.*.details`，跑两次 diagnose（一次 stdout、一次 `--write-report`），断言 stdout / 文件 / stderr 都不含 raw secret
+- 对 `review_prompt_refs` / `batch_continuity`：跑 stub (`review-run` / `review-batch`)，断言 `implementation_status="not_implemented"` + `tool_invocations=[]`
+- `approval_required_write` 仍是 shape-only（已由 `validate_approval_gate_shape` 覆盖）
+
+现在每个 scenario **两轮验证**：先 artifact existence (`validate_live_cross_check`)，再真跑 agent (`validate_live_agent_replay`)。P1 这种运行时缺陷会被第二轮抓到。
+
+#### P3-1：PROJECT_STATUS.json 数字 stale + next_actions 噪音
+
+**Bug**: status string 含 `339_tests_stable`（实际 342 / 现在 345）。`next_actions` 段保留 9 条 v1.0 RC P1 fix 风格条目（已完成但未清出）。
+
+**Fix**:
+- `status` → `v10_phase3_p1_product_agent_skeleton_read_only_complete_with_p1_5_redact_harness_replay_fix`
+- 清 9 条过时 next-action（`proma_read_docs_*` / `fix_p1_*` / `fix_p2_*` / `add_*` / `codex_review_v10_phase2_*`）
+- 加 4 条 Phase 3 P1.5 next-action 锚点（`phase3_p1_5_*`）
+- `completed_steps` 总数保持 103（"清除"只是把条目从 next_actions 移到 completed_steps 概念上，实际未增加 step；用户偏好"已完成的应该已经在 completed_steps 里"——之前手工补，这次只清 next_actions）
+
+#### P3-2：`_build_summary_zh` 文档说"no emojis"但 emit `⚠`
+
+**Fix**: `planner/agent/diagnose.py:832 + :839` `⚠` → `[RED LINE]`。docstring "no emojis, no exclamation marks" 现在与实际一致。
+
+### Verification
+
+- `python3 -m pytest` —— **345 passed**（342 + 3 新 redact test；0 回归）
+- `python3 harness/agent_scenarios/run_all.py` —— **7 scenarios 全过** + **6 真跑 agent CLI replay 全过**（P1 secret leak 现在会被 `diagnose_secret_redaction` 抓）
+- e2e smoke: `python3 -m planner agent diagnose <modified-run-with-secrets>` 现在 stdout / `--write-report` 文件 / stderr 都 redact secret
+- git 工作区准备 commit；baseline `91b3d2a` + Phase 3 P1 `b8a8f57` / `b178571` 已固化
+
+### Files Changed
+
+#### 修改（4 个）
+
+- `planner/agent/diagnose.py` — 5 处 redact + 2 处 `⚠` → `[RED LINE]`
+- `harness/agent_scenarios/run_all.py` — 新增 `validate_live_agent_replay` + main 接入
+- `tests/test_agent_diagnose.py` — 3 个新 redact test
+- `PROJECT_STATUS.json` — status 更新 + next_actions 清 9 条过时 + 加 4 条 P1.5 锚点
+
+#### 未改动
+
+- `planner/agent/redact.py`（regex 已正确，复用即可）
+- `planner/agent/readers.py` / `tools.py` / `__init__.py` / `cli.py`（无 secret 字段直接复制）
+- `harness/agent_scenarios/*.json`（shape 不变；replay 在 Python 端注入 secret）
+- `CHANGELOG.md`（本段即是）
+- `HANDOFF.md`（本轮是 fix-up 不影响 Phase 3 P1 主线；状态描述仍然准确）
+
+### Outstanding / Still TODO
+
+- 不进 Phase 3 P2。等用户第二次手工 Codex 复审放行后再决定（Phase 3 P2 候选：review-run 完整实现 / review-batch 完整实现 / GUI agent 面板）。
+- Phase 0 git push to GitHub：仍 blocked on user URL。
+- opt-in probe + Phase Core-3 跨集连续性 + pkg/CI 路线：不变。
+
 ## 2026-07-13 (Proma Phase 0 + Phase 3 P1 — git baseline + 产品内只读 Agent 最小骨架)
 
 ### Background
