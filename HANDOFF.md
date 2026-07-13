@@ -1,5 +1,96 @@
 # Handoff
 
+## 当前状态（2026-07-13 - Phase 0 + Phase 3 P1 完工）
+
+按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分（产品内 agent read-only / guided）首次落地，配套 Phase 0 (git init + baseline)。**用户已批准的边界（9 条）全部守住**：不接 LLM / 不接 executor / 不增加必需 SDK / 不静默放宽红线 / 不写仓内产物（production）/ 不保存 API key / 不执行任意 shell / 不接 GUI RunRegistry / review-run + review-batch 留 stub。
+
+### Phase 0 — git init + baseline
+
+- `git init -b main`；`.gitignore` 覆盖 `runs/*` + `logs/**` + `assets/**` + `data/**` + `*.egg-info` + `build/` + `.DS_Store` + `__pycache__` + `config/production.json`；保留 19 个 `.gitkeep`（用 `git add -f` 绕过 git 对 `**` re-include 不支持的限制）。
+- 2 个 commit：`b9f8dc9` (.gitignore) + `91b3d2a` (baseline v1.0 + Phase 2，112 文件)。
+- 271 baseline pytest 仍全过；仓库 `runs/` 仍只含根 `.gitkeep`。
+
+### Phase 3 P1 — `planner/agent/` 子包最小骨架
+
+#### 包结构（flat 6 文件，不引入 sub-package）
+
+```
+planner/agent/
+├── __init__.py     # 导出 diagnose_run_dir + build_not_implemented_report + Pydantic models + TOOL_REGISTRY
+├── cli.py          # Click group "agent" + 3 子命令 + _check_and_write_report 政策
+├── redact.py       # 4 条 regex (Bearer + sk- + sk-ant- + gho_; Anthropic 在 OpenAI 之前匹配)
+├── readers.py      # 5 个 graceful reader (load_run_summary / load_artifact / list_artifacts / load_batch_summary / list_runs_in_batch)
+├── diagnose.py     # Pydantic models + 13 条规则 + 中文摘要 + build_not_implemented_report
+└── tools.py        # 6 个 read-only tool + TOOL_REGISTRY + TOOL_ARTIFACT_MAP (与 harness 同步)
+```
+
+#### 13 条诊断规则
+
+| # | code | severity | 实现 | 说明 |
+|---|---|---|---|---|
+| R1 | `production_fallback_used` | error | 委托 validate_run | production run 用 fallback = 红线违规 |
+| R2 | `dev_fallback_used` | warning | 独立 | dev fallback 是 expected |
+| R3 | `all_providers_unhealthy` | warning | 独立 | provider_health 全 false |
+| R4 | `executor_tool_hardcoded` | error | 独立（红线） | executor_tasks[].tool != None |
+| R5 | `env_mismatch` | warning | 委托 validate_run | run_summary.env ≠ expected_env |
+| R6 | `script_source_mismatch` | error | 委托 validate_run | script_parse.source_path ≠ run_summary.script |
+| R7 | `production_executor_status_wrong` | error | 独立 | production + executor_status ≠ pending_manual_approval |
+| R8 | `api_key_env_unset` | warning | 独立 | runtime.api_key_env 声明但 env 为空；**production 下 message sanitization** |
+| R9 | `real_calls_disabled_but_not_deterministic` | warning | 独立 | runtime.enable_real_model_calls=False 但 effective ≠ deterministic |
+| R10 | `missing_run_summary` | error | 入口 | run_summary.json 不存在 |
+| R11 | `corrupted_run_summary` | error | 入口（graceful） | run_summary.json 坏 JSON |
+| R12 | `partial_run_missing_artifact` | warning | 独立 | run 已 done 但 ≥1 核心 artifact 缺失；**列出哪个缺 + 不下结论 + 不重建** |
+| R13 | `image_prompts_count_mismatch` / `video_prompts_count_mismatch` | warning | 独立 | counts.shots ≠ counts.image/video |
+
+#### CLI 表面
+
+- `planner agent diagnose <run-dir> [--expected-env X] [--format json|markdown] [--write-report P] [-v]`
+- `planner agent review-run <run-dir> [--write-report P]`（stub）
+- `planner agent review-batch <batch-dir> [--write-report P]`（stub）
+
+#### 退出码语义
+
+| 场景 | exit |
+|---|---|
+| `status="errors"` | 1 |
+| `status="warnings"` 或 `status="ok"` | 0 |
+| production + `--write-report` 仓内 | 2 (policy refusal) |
+| 参数错误（missing dir） | 2 |
+| Stub 命令（合法参数） | 0 |
+| Stub 命令（不合法参数） | 2 |
+| Traceback 泄露 | fail tests（不达用户） |
+
+#### `--write-report` 政策（关键边界）
+
+- dev + 仓内 → stderr 黄色 WARN + allow + 落盘
+- production + 仓内 → stderr 红字 + rc=2 + **不写**（用 `is_inside_repo` 共享 helper）
+- production + 仓外 → 正常写
+- run_summary 缺失 → 默认按 production policy 处理（fail-closed）
+
+### 7 个 harness scenario 全过
+
+- 现有 4：`diagnose_failed_run` / `review_prompt_refs` / `batch_continuity` / `approval_required_write`
+- 新增 3：`diagnose_fallback_used` / `diagnose_partial_run` / `diagnose_secret_redaction`
+- `python3 harness/agent_scenarios/run_all.py` —— ALL AGENT SCENARIO STEPS PASSED ✔
+
+### Red line 守门（与 Phase 2 一致 + 新增）
+
+- `pyproject.toml [project]` 基础依赖**未动**：仍只 `pydantic + click`。
+- 339 pytest = 271 baseline + 68 新增 agent tests，**零回归**。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed contract 保留（R1 / R4 / R7 + `--write-report` 政策 + `is_inside_repo` 共享 helper）。
+- API key 永不写盘：redact 覆盖所有出口（finding message / summary / stderr / `--write-report` 文件）。
+- `executor_tasks.json.tool` 仍 None；R4 红线独立 emit error。
+- 不接 GUI RunRegistry（agent 进程独立地址空间）。
+- Stub 命令 `tool_invocations=[]` 表明没做任何 read。
+
+### 下一轮
+
+- **review 子会话（扮演 Codex-style 角色）复审 Phase 3 P1**（重点看 read-only 边界 / `--write-report` 政策 / redact 出口 / 13 条规则与 validate_run 复用切分 / stub 不假装 / harness scenario 形状 / 三件套对齐）。
+- **Phase 3 P2**：`review-run` + `review-batch` 完整实现 + harness scenarios 加覆盖 + GUI agent 面板（按"核心先于壳层"原则排在最后）。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe**（与 `health_check` 严格分离）+ Phase Core-3 跨集连续性 + pkg/CI 路线。
+
 ## 当前状态（2026-07-13 - Phase 2 Harness Engineering 完工）
 
 按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第四部分，把 Harness

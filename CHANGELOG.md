@@ -2,6 +2,154 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-13 (Proma Phase 0 + Phase 3 P1 — git baseline + 产品内只读 Agent 最小骨架)
+
+### Background
+
+按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分（产品内 agent read-only / guided）首次落地，配套完成 Phase 0 (git init + baseline)。本轮交付：
+
+1. **Phase 0**：仓库从无 git → 2 个 commit (`b9f8dc9` + `91b3d2a`)，112 个文件 tracked；`.gitignore` 覆盖 runs/ + *.egg-info + build/ + .DS_Store + __pycache__ + `config/production.json` 等噪音与敏感文件；保留 runs/.gitkeep + 18 个 subdirectory .gitkeep（用 `git add -f` 绕过 .gitignore，因为 git 的 `!` re-include 不支持 `**`）。
+2. **`planner/agent/` 子包**：flat 6 文件布局，无 sub-package；6 个 read-only 工具；13 条诊断规则；3 个 Click 子命令（diagnose 完整 + review-run/review-batch stub）；约 380 行实现 + 339 pytest。
+3. **3 个新 harness scenario**：`diagnose_fallback_used` / `diagnose_partial_run` / `diagnose_secret_redaction`，与现有 4 个 scenario 共 7 个全部通过 `python3 harness/agent_scenarios/run_all.py`。
+
+### Added
+
+#### Phase 0: git baseline
+
+1. **`.gitignore`**（首次系统化写）：覆盖 Python 工具链 + IDE/OS + pytest 缓存 + env/secrets + project-specific（`runs/*` + `logs/**` + `assets/**` + `data/**` + production config 排除）。`.env.example` + `samples/v1/*.txt` + 19 个 `.gitkeep` 通过 `git add -f` 强制 add。
+2. **`git init -b main`**：项目根初始化 git 仓库；`git config user.name "shiming jiang"` + `user.email "shimingjiang@users.noreply.localhost"`（项目本地，不污染 global）。
+3. **2 个 commit**：`b9f8dc9` (init .gitignore) + `91b3d2a` (baseline v1.0 + Phase 2，112 文件)。HANDOFF.md / PROJECT_STATUS.json 三件套留 baseline commit hash 用于后续复审 / 回滚。
+
+#### `planner/agent/` 子包（Phase 3 P1 最小骨架）
+
+4. **`planner/agent/redact.py`**（~50 行）：4 条 secret regex（Bearer / sk- / sk-ant- / gho_），**Anthropic 在 OpenAI 之前匹配**（因为 sk-ant- 前缀会被 sk- 错匹配）。UUID / 短串 / 普通词不会被误命中。复制自 `planner/providers/openai_compatible_adapter.py:177-188` 的 `_redact_secrets`。
+5. **`planner/agent/readers.py`**（~110 行）：5 个 graceful reader（`load_run_summary` / `load_artifact` / `list_artifacts` / `load_batch_summary` / `list_runs_in_batch`）。`load_*_summary` 返回 `(data, error)` 元组（缺/坏 JSON → None + 错误信息），`load_artifact` 抛 `ValueError` / `FileNotFoundError`（让 diagnose 出 finding）。50 MB size cap。
+6. **`planner/agent/tools.py`**（~110 行）：6 个 read-only tool（`read_run_summary` / `list_artifacts` / `read_artifact` / `validate_run` / `read_batch_summary` / `list_runs_in_batch`）+ `TOOL_REGISTRY` + `TOOL_ARTIFACT_MAP`（必须与 `harness/agent_scenarios/run_all.py:_TOOL_ARTIFACT_MAP` 同步——PR 改任一边必须改两边）。
+7. **`planner/agent/diagnose.py`**（~580 行）：核心引擎。Pydantic models (`DiagnoseReport` / `DiagnoseFinding` / `EvidenceRef` / `ToolInvocation` / `ProviderSummary` / `ProviderRuntimeSummary` / `ValidationSummary` / `HealthRecord`) + 13 条规则 + 中文 `_build_summary_zh` + `build_not_implemented_report`（stub factory）+ `diagnose_run_dir` 入口（graceful degradation）。
+8. **`planner/agent/cli.py`**（~270 行）：Click group `agent` + 3 子命令。`--write-report` 走 `_check_and_write_report` 政策（production + 仓内 → rc=2 + 不写；dev + 仓内 → warn + 写；run_summary 缺失 env 默认 production fail-closed）。
+9. **`planner/agent/__init__.py`**（~50 行）：导出 `diagnose_run_dir` / `build_not_implemented_report` / 全部 Pydantic models / `TOOL_REGISTRY` / `TOOL_ARTIFACT_MAP`。
+10. **`planner/cli.py`** 改 ~10 行：顶部 import `from .agent.cli import agent_group` + `@cli.group()` 后 `cli.add_command(agent_group)`。
+
+#### 13 条诊断规则（Phase 3 P1）
+
+| # | code | severity | 实现方式 | 说明 |
+|---|---|---|---|---|
+| R1 | `production_fallback_used` | error | **委托 validate_run** | production run 用 provider fallback = 红线违规 |
+| R2 | `dev_fallback_used` | warning | 独立 | development run 用 fallback 是 expected，不是 error |
+| R3 | `all_providers_unhealthy` | warning | 独立 | provider_health 全 false |
+| R4 | `executor_tool_hardcoded` | error | 独立（红线） | executor_tasks[].tool != None 触发 |
+| R5 | `env_mismatch` | warning | **委托 validate_run** | run_summary.env ≠ expected_env |
+| R6 | `script_source_mismatch` | error | **委托 validate_run** | script_parse.source_path ≠ run_summary.script |
+| R7 | `production_executor_status_wrong` | error | 独立 | production + executor_status ≠ pending_manual_approval |
+| R8 | `api_key_env_unset` | warning | 独立 | runtime.api_key_env 声明但 os.environ 为空；**production 下 message 不 echo env var 名** |
+| R9 | `real_calls_disabled_but_not_deterministic` | warning | 独立 | runtime.enable_real_model_calls=False 但 effective ≠ deterministic |
+| R10 | `missing_run_summary` | error | 入口处理 | run_summary.json 不存在 |
+| R11 | `corrupted_run_summary` | error | 入口处理 | run_summary.json 坏 JSON（graceful，不抛） |
+| R12 | `partial_run_missing_artifact` | warning | 独立 | run 已 done 但 ≥1 核心 artifact 缺失；**列出哪个缺 + 不下结论 + 不重建** |
+| R13 | `image_prompts_count_mismatch` / `video_prompts_count_mismatch` | warning | 独立 | counts.shots 与 counts.image/video 不一致 |
+
+#### 新 pytest（5 个文件 + 1 个追加）
+
+11. **`tests/test_agent_redact.py`**（5 tests）：4 条 regex 各覆盖 + UUID/短串不误命中 + Bearer 保留前缀 + 多 secret 同字符串。
+12. **`tests/test_agent_readers.py`**（12 tests）：缺文件 / 坏 JSON / 正常 / size cap / 未知 name / batch 子目录过滤。
+13. **`tests/test_agent_tools.py`**（8 tests）：6 个 tool + TOOL_REGISTRY/TOOL_ARTIFACT_MAP 键对齐 + KeyError 契约 + validate_run 委托（monkeypatch `planner.validate.validate_run`）。
+14. **`tests/test_agent_diagnose.py`**（22 tests）：13 条规则每条至少 1 个 fixture + dev/prod 矩阵 + status 推导 + stub `tool_invocations=[]`。
+15. **`tests/test_agent_cli.py`**（7 tests, subprocess）：diagnose exit 0 + missing dir exit 2 + --write-report /tmp + dev 仓内 warn + production 仓内 rc=2 + stubs rc=0 + `--help` 正常。
+16. **`tests/test_boundaries.py`** 追加 1 条：`test_agent_cli_does_not_leak_traceback`（subprocess 跑 fail 路径，stderr 不含 `Traceback`，镜像 `test_cli_friendly_error_when_production_config_missing` 精神）。
+
+#### 3 个新 harness scenario
+
+17. **`harness/agent_scenarios/diagnose_fallback_used.json`**：覆盖 R1 + R2 + redaction of fallback_reason。
+18. **`harness/agent_scenarios/diagnose_partial_run.json`**：覆盖 R10 + R12；显式 forbid `recreate_missing_artifact` / `delete_partial_run`。
+19. **`harness/agent_scenarios/diagnose_secret_redaction.json`**：覆盖 redact 出口（stdout / stderr / --write-report / finding message）；显式 forbid `read_api_key_value` / `echo_secret_to_*`。
+
+### Hard-Boundary Preservation
+
+- `pyproject.toml [project]` 基础依赖**未动**：仍只 `pydantic + click`。`planner/agent/` 不引入新 SDK / LLM / 网络依赖。
+- `pip install -e .` 基础安装**未回归**：339 pytest = 271 baseline + 68 新增。
+- production fail-closed contract 保留：R1/R4/R7 三条红线独立 emit error；`--write-report` 在 production + 仓内 → hard refuse rc=2（用 `is_inside_repo` 共享 helper）。
+- `executor_tasks.json.tool` 仍 None：agent 不重写 executor，不接 Flowith/libTV/可灵/即梦/ComfyUI。R4 是 error 类规则，任何 plugin 误填 tool 都被立即发现。
+- API key 永不写盘：`run_summary.json` 只存 `api_key_env` 名；R8 在 production 下 message sanitization；redact 模块覆盖所有 finding / summary / `--write-report` 出口。
+- GUI 与 agent 进程隔离：agent 不查 `planner/web/run_registry.py`（in-memory dict）。CLI 拒绝查 run_id，统一要求路径。
+- 仓库 `runs/` 仍只含根 `.gitkeep`：所有 smoke 产物走 `/tmp`；harness scenarios 用 `tempfile.mkdtemp` 自动清理。
+
+### Verification
+
+- `python3 -m pytest` —— **339 passed, 2 warnings in 16.82s**（271 baseline + 5 + 12 + 8 + 22 + 7 + 1 边界追加）。
+- `python3 harness/agent_scenarios/run_all.py` —— **7 scenario 全过**（4 旧 + 3 新）。
+- e2e smoke（手测 + 自动化）：
+  ```
+  $ python3 -m planner agent diagnose /tmp/sample-run
+  exit=0; status=ok; findings=0  (dev run 一切正常)
+  
+  $ python3 -m planner agent diagnose /tmp/sample-run --write-report runs/test.json
+  exit=0; stderr yellow WARNING; runs/test.json 落盘 1662 bytes
+  
+  $ python3 -m planner agent diagnose /tmp/prod-run --write-report runs/test-prod.json
+  exit=2; stderr "production diagnose refuses to write inside the project repository";
+         runs/test-prod.json 不存在（hard refuse 不留残留）
+  
+  $ python3 -m planner agent review-run /tmp/sample-run
+  exit=0; implementation_status=not_implemented; tool_invocations=[]
+  
+  $ python3 -m planner agent diagnose /no/such/path
+  exit=2; stderr 无 Traceback（友好 Click Usage 消息）
+  ```
+- git baseline 验证：
+  ```
+  $ git log --oneline
+  91b3d2a Phase 0: baseline v1.0 + Phase 2 Harness Engineering
+  b9f8dc9 Phase 0: init repo with .gitignore
+  
+  $ git status
+  On branch main
+  nothing to commit, working tree clean
+  ```
+
+### Files Changed
+
+#### 新增（11 个文件）
+
+- `.gitignore`
+- `planner/agent/__init__.py`
+- `planner/agent/cli.py`
+- `planner/agent/redact.py`
+- `planner/agent/readers.py`
+- `planner/agent/diagnose.py`
+- `planner/agent/tools.py`
+- `tests/test_agent_redact.py`
+- `tests/test_agent_readers.py`
+- `tests/test_agent_tools.py`
+- `tests/test_agent_diagnose.py`
+- `tests/test_agent_cli.py`
+- `harness/agent_scenarios/diagnose_fallback_used.json`
+- `harness/agent_scenarios/diagnose_partial_run.json`
+- `harness/agent_scenarios/diagnose_secret_redaction.json`
+
+#### 修改（2 个文件）
+
+- `planner/cli.py`（顶部 import agent_group + add_command）
+- `tests/test_boundaries.py`（追加 1 条 traceback-leak 测试）
+
+### Outstanding / Still TODO
+
+- 仍按 Phase 3 P1 严格不做：调任何 LLM / 接 executor / arbitrary shell / 把 production.json commit / 在 production 下静默放宽红线。
+- Phase 3 P2 候选（harness scenarios 已固化）：
+  - `review-run` 完整实现（跨 shot 间 prompt 一致性 + character bible 比对）
+  - `review-batch` 完整实现（跨 episode 共享人物 / 场景 / 道具连续性）
+  - harness scenarios 加 `review_run_implementation` / `review_batch_implementation` 覆盖新实现
+- 不在 Phase 3 P1 范围（保留下一轮）：
+  - opt-in `probe`（与 `health_check` 严格分离）
+  - Phase Core-3 跨集连续性（bible merge）
+  - GUI agent 面板（按"核心先于壳层"原则留到最后）
+  - PyInstaller / GitHub Actions release
+
+### Next（待 review 子会话复审）
+
+- 派 review 子会话（扮演 Codex-style 角色，对 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分的落地做对抗式独立审查）
+- 重点核对：read-only 边界 / `--write-report` 政策是否破得了 / redact 是否覆盖所有出口 / 13 条规则与 validate_run 复用切分 / stub 真没读 / harness scenario 真没漂移 / git baseline 干净
+- 复审 verdict → 主会话修齐 → 用户主对话 verdict 放行 Phase 3 P2
+
 ## 2026-07-13 (Proma v1.0 RC P1/P2 修复 - model config 接入 / GUI 闭环 / launcher 修复)
 
 ### Background

@@ -38,6 +38,12 @@ from .exceptions import EnvironmentBoundaryError, PlannerError
 from .pipeline import run as run_pipeline
 from .validate import ValidationReport, validate_run
 
+# Phase 3 P1: product agent (read-only diagnose + 2 stubs).
+# Imported here so its @click.group registers before any @cli.command
+# below; the add_command call happens just after @cli.group is
+# defined below.
+from .agent.cli import agent_group
+
 
 def _resolve_project_root(ctx: click.Context) -> Path:
     root = ctx.obj.get("project_root") if ctx.obj else None
@@ -85,6 +91,11 @@ def _load_model_config_for_cli(model_config_path: Optional[Path]):
 def cli(ctx: click.Context, project_root: Optional[Path]) -> None:
     ctx.ensure_object(dict)
     ctx.obj["project_root"] = project_root
+
+
+# Phase 3 P1: register the agent sub-group. The actual command
+# implementations live in planner/agent/cli.py.
+cli.add_command(agent_group)
 
 
 @cli.command("run")

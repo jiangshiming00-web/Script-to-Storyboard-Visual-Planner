@@ -245,3 +245,32 @@ def test_validate_reports_env_mismatch(
     # exit 0 because validation itself passed (artifacts are intact).
     assert result.returncode == 0
     assert "env mismatch" in result.stderr.lower()
+
+
+def test_agent_cli_does_not_leak_traceback(project_root: Path, tmp_path: Path) -> None:
+    """Phase 3 P1: ``planner agent diagnose`` on a missing path must
+    exit non-zero with a friendly Click Usage message — never a
+    Python traceback.
+
+    Mirrors :func:`test_cli_friendly_error_when_production_config_missing`
+    for the new ``planner agent`` subcommand. The contract is the
+    same: the operator sees the error, not the internals.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "planner",
+            "agent",
+            "diagnose",
+            str(tmp_path / "no_such_run_dir"),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(project_root),
+        env={k: v for k, v in os.environ.items() if not k.startswith("PLANNER_")},
+    )
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr, (
+        f"Traceback leaked to user: {result.stderr[:500]}"
+    )
