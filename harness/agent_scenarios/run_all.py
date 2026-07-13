@@ -13,10 +13,24 @@ two checks:
    directory (diagnose / review), the runner generates a fresh
    development run via ``planner run`` and verifies that the scenario's
    declared ``expected_tool_calls`` are individually applicable
-   against the produced artifacts. We do NOT call into an agent
-   (the product-side agent is out of scope for v1.0); the runner
-   only checks that **if** the agent followed the scenario, the
-   artifacts it would touch exist.
+   against the produced artifacts. This is the "if the agent
+   followed the scenario, the artifacts it would touch exist"
+   half of the harness.
+
+3. **Live agent replay** (added Phase 3 P1.5 — round-2 Codex review)
+   — for each diagnose / review scenario, the runner also invokes
+   the REAL ``planner agent diagnose|review-run|review-batch`` CLI
+   against the generated run and asserts the output:
+   ``diagnose_*`` exits 0 with valid JSON + ``implementation_status
+   = "full"``; ``diagnose_secret_redaction`` additionally injects
+   fake secrets into ``fallback_reason`` / ``provider_health.*`` /
+   ``provider_runtime.*`` and asserts the raw tokens do NOT appear
+   in stdout / --write-report file / stderr (closed after Codex
+   found the ``provider_runtime`` exit was unredacted); the
+   review_* scenarios assert ``implementation_status =
+   "not_implemented"`` + empty ``tool_invocations``. This catches
+   real runtime defects (e.g. secret leak in newly added exit
+   surfaces) that static shape + artifact existence cannot.
 
 The runner does NOT execute the agent and does NOT trigger any
 write actions. It is purely a static + live cross-check harness so
@@ -247,20 +261,42 @@ def validate_live_agent_replay(
     # ------------------------------------------------------------------
     if cat == "diagnose":
         if "secret_redaction" in name:
-            # Inject a fake secret into fallback_reason + a couple
-            # of provider_health detail fields, then run diagnose
-            # and assert the secret is redacted in stdout + in the
-            # --write-report file. This is the P2 replay that
-            # catches the P1 secret-leak defect.
+            # Inject fake secrets into EVERY text surface that the
+            # agent copies from run_summary.json into the report:
+            #
+            #   * fallback_reason (provider.fallback_reason)
+            #   * provider_health.*.reason + .details[*]
+            #   * provider_runtime.model + .base_url + .api_key_env
+            #
+            # The injected ``runtime_*`` tokens would NOT be caught
+            # by the original secret-redaction replay (which only
+            # touched fallback_reason + provider_health). The
+            # round-2 Codex manual review found this gap and it is
+            # the reason this scenario is parameterized over all
+            # 4 exit surfaces. After the fix, NONE of the tokens
+            # below may appear in stdout / --write-report / stderr.
             secret = "Bearer eyJhbGciOiJIUzI1NiJ9-fake-secret-replay-12345678"
             other = "sk-proj-replay-fake-secret-12345678"
+            runtime_model = (
+                "sk-runtime-model-secret-replay-12345678"
+            )
+            runtime_url = (
+                "https://api.example.com/v1?key=Bearer RUNTIMESECRET"
+                "-replay-12345678"
+            )
+            runtime_env = (
+                "PLANNER_OPENAI_API_KEY_with_sk-runtime-env-secret-"
+                "replay-12345678"
+            )
             modified_dir = sample_run_dir.parent / (
                 sample_run_dir.name + "_with_secrets"
             )
             shutil.copytree(sample_run_dir, modified_dir)
             summary_path = modified_dir / "run_summary.json"
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["fallback_reason"] = f"upstream returned {secret} key={other}"
+            summary["fallback_reason"] = (
+                f"upstream returned {secret} key={other}"
+            )
             summary["fallback_used"] = True
             summary["requested_provider"] = "openai_compatible"
             summary["effective_provider"] = "deterministic"
@@ -272,13 +308,27 @@ def validate_live_agent_replay(
                     "details": {"phase": "1", "leaked_token": secret},
                 }
             }
+            summary["provider_runtime"] = {
+                "model": runtime_model,
+                "base_url": runtime_url,
+                "api_key_env": runtime_env,
+                "enable_real_model_calls": True,
+            }
             summary_path.write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             target_dir = modified_dir
+            # Track the runtime secrets for the second --write-report
+            # assertion block further down.
+            extra_needles: list[str] = [
+                runtime_model,
+                "RUNTIMESECRET-replay-12345678",
+                "sk-runtime-env-secret-replay-12345678",
+            ]
         else:
             target_dir = sample_run_dir
+            extra_needles = []
 
         # CLI run #1: stdout JSON, no --write-report.
         proc = _run_planner_agent_cli(
@@ -303,8 +353,12 @@ def validate_live_agent_replay(
             )
 
         if "secret_redaction" in name:
-            # Secret must NOT appear anywhere in stdout.
-            for needle in (secret, other):
+            # Secret must NOT appear anywhere in stdout. We check
+            # every needle (the fallback_reason / provider_health
+            # tokens AND the new provider_runtime tokens) so any
+            # new exit surface that forgets to redact gets caught.
+            all_needles = (secret, other, *extra_needles)
+            for needle in all_needles:
                 if needle in proc.stdout:
                     raise SystemExit(
                         f"[agent_scenarios] {name}: secret leaked into "
@@ -336,7 +390,7 @@ def validate_live_agent_replay(
                     f"[agent_scenarios] {name}: cannot read --write-report "
                     f"file {report_path}: {exc}"
                 )
-            for needle in (secret, other):
+            for needle in all_needles:
                 if needle in file_content:
                     raise SystemExit(
                         f"[agent_scenarios] {name}: secret leaked into "

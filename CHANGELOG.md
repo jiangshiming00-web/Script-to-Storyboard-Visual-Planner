@@ -2,6 +2,82 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-13 (Proma Phase 3 P1.6 — Codex 手工复审第二轮 5 findings 修齐)
+
+### Background
+
+按 `agent-roles.md` 双层结构，用户（shiming jiang）作为 Codex 手工对手方对 Phase 3 P1.5 做**第二次手工 Codex 复审**。命中 1 个**残留 P1（红线）** + 1 个 P2（harness 覆盖不全） + 3 个 P3（文档/状态 stale）。本轮全部按"本轮顺手补"原则修齐（含 P1 必修），交付用户第三次手工 Codex 复审。
+
+### Findings → Fixes
+
+#### P1 (红线)：secret redaction 仍漏 `provider_runtime` + R8 dev message 出口
+
+**Bug**: `planner/agent/diagnose.py:678` 的 `ProviderRuntimeSummary(model=, base_url=, api_key_env=, ...)` 4 字段原样复制，没走 redact。`planner/agent/diagnose.py:423` 的 R8 dev 分支 message 直接输出 `api_key_env` env var name（如 `'PLANNER_OPENAI_API_KEY'`）。
+
+**Fix**:
+- `planner/agent/diagnose.py` `ProviderRuntimeSummary` 4 字段：3 个字符串字段（model / base_url / api_key_env）全部走 `_safe_text`（bool 字段 `enable_real_model_calls` 不需要 redact）
+- `planner/agent/diagnose.py` R8 dev 分支 message：`f"api_key_env={api_key_env!r} "` → `f"api_key_env={_safe_text(repr(api_key_env))} "`
+
+**Tests**（2 个新 test 钉住 behavior）：
+- `tests/test_agent_diagnose.py::test_provider_runtime_fields_are_redacted_in_report` — 注入 3 个 token（`sk-runtime-model-secret-...` / `Bearer RUNTIMESECRET-...` URL query / `sk-runtime-env-secret-...` env var name）→ 断言 serialized report 不含 raw token + runtime 字段都被 redact
+- `tests/test_agent_diagnose.py::test_r8_dev_message_redacts_api_key_env_name` — env var name 故意含 `sk-leak-...` 子串 → 断言 R8 message 含 `<redacted>` 不含 raw leak
+
+#### P2：harness secret 注入只覆盖 `fallback_reason` + `provider_health`，没覆盖 `provider_runtime`
+
+**Bug**: `diagnose_secret_redaction` scenario 第一轮注入的 secret 集合是 `{fallback_reason, provider_health.*.reason, provider_health.*.details}`。所以这次残留 P1（ProviderRuntimeSummary 出口）没被 harness 抓到——harness 跑完仍 pass。
+
+**Fix**: `harness/agent_scenarios/run_all.py` `validate_live_agent_replay()` secret_redaction 分支：
+- 新增 3 个 fake token：`runtime_model = "sk-runtime-model-secret-replay-..."` / `runtime_url = "https://...?key=Bearer RUNTIMESECRET-..."` / `runtime_env = "PLANNER_OPENAI_API_KEY_with_sk-runtime-env-secret-..."`
+- 注入到 `summary["provider_runtime"]`（model / base_url / api_key_env / enable_real_model_calls=True）
+- stdout / `--write-report` 文件 / stderr 三个出口的 needle 断言从 `(secret, other)` 扩到 `(secret, other, *extra_needles)`
+- 这样新增任何 exit 表面忘记 redact，harness 会立即 fail
+
+#### P3-1：`harness/agent_scenarios/run_all.py:16` 顶部 docstring 矛盾
+
+**Bug**: docstring 写 "We do NOT call into an agent (the product-side agent is out of scope for v1.0)"，但 `validate_live_agent_replay()` 已经真跑 agent CLI。
+
+**Fix**: 重写 docstring 第 2 步为 "Static + live cross-check"，新增第 3 步 "Live agent replay (added Phase 3 P1.5 — round-2 Codex review)"，明确写三个分支：diagnose_* / diagnose_secret_redaction / review_* 的具体断言。
+
+#### P3-2：`PROJECT_STATUS.json` `v10_phase2_no_product_agent` 与现状矛盾
+
+**Bug**: line 538 `v10_phase2_no_product_agent: "pass (planner/agent/ 不存在; harness 仅固化场景 + 校验 shape)"`——planner/agent/ 在 Phase 3 P1 已落地，但这条 verification 字段没更新。
+
+**Fix**: 改写为 "historical, pre-Phase 3 P1; planner/agent/ now exists with 6 flat files + 13 rules + 3 Click subcommands; see v10_phase3_p1_agent_module_landed for current state"。
+
+#### P3-3：`PROJECT_STATUS.json` pytest 数字 stale
+
+**Bug**: `v10_phase3_p1_test_count: "pass (339 pytest = ...)"` —— 当前是 347（345 + 2 个 P1.6 tests）。
+
+**Fix**: 改写为 "pass (347 pytest after P1.6 fix = 271 baseline + 5 test_agent_redact + 12 test_agent_readers + 9 test_agent_tools + 25 test_agent_diagnose + 7 test_agent_cli + 1 added test_boundaries + ~15 baseline overlap; 0 regression)"。`completed_steps` line 243 的 `phase3_p1_339_pytest_passed_...` 历史快照保留（描述当时 P1 那个 commit 的状态）。
+
+### Verification
+
+- `python3 -m pytest` —— **347 passed, 2 warnings in 20.73s**（345 + 2 新 P1.6 tests；0 回归）
+- `python3 harness/agent_scenarios/run_all.py` —— **7 scenarios 全过**（每个含 live cross-check + live agent replay 两轮），`diagnose_secret_redaction` 现在能 catch `provider_runtime` 出口的 secret leak
+- e2e: 注入 7 个 fake secret（fallback_reason + provider_health.* + provider_runtime.*）的 sample run + diagnose + `--write-report`：stdout / 文件 / stderr 三个出口全部 redact ✓
+
+### Files Changed
+
+#### 修改（3 个）
+
+- `planner/agent/diagnose.py` — 5 处 redact（ProviderRuntimeSummary 4 字段 + R8 dev message 1 字段）
+- `harness/agent_scenarios/run_all.py` — `validate_live_agent_replay` 注入 provider_runtime + 顶部 docstring 重写
+- `tests/test_agent_diagnose.py` — 2 个新 P1.6 redact tests
+- `PROJECT_STATUS.json` — 2 处 stale 修正（v10_phase2_no_product_agent 上下文 + pytest 347）
+- `CHANGELOG.md` — 本段
+
+#### 未改动
+
+- `planner/agent/redact.py`（regex 已正确；只是漏调用）
+- `planner/agent/{readers,tools,__init__,cli}.py`（无 secret 字段直接复制）
+- `HANDOFF.md`（本轮是 fix-up；状态描述仍准确）
+
+### Outstanding / Still TODO
+
+- 不进 Phase 3 P2。等用户第三次手工 Codex 复审放行。
+- Phase 0 git push to GitHub：仍 blocked on user URL。
+- opt-in probe + Phase Core-3 跨集连续性 + pkg/CI 路线：不变。
+
 ## 2026-07-13 (Proma Phase 3 P1.5 — Codex 手工复审 4 findings 修齐)
 
 ### Background

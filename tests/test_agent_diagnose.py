@@ -589,6 +589,88 @@ def test_validation_errors_warnings_are_redacted_in_report(tmp_path: Path) -> No
         assert secret not in warn
 
 
+# ---------- P1.6 fix: redact provider_runtime fields + R8 dev message ----------
+
+
+def test_provider_runtime_fields_are_redacted_in_report(tmp_path: Path) -> None:
+    """P1 fix (Codex manual review round 2): ``provider.runtime.model``,
+    ``base_url``, ``api_key_env`` are copied verbatim from
+    ``provider_runtime``. A future provider may interpolate tokens
+    into any of them (e.g. ``base_url`` with query-string bearer
+    tokens, or a model name that contains a leak). Redact all
+    three before they reach the report.
+    """
+    secret_model = "sk-runtime-model-secret-redact-test-12345678"
+    secret_url = (
+        "https://api.example.com/v1?token=Bearer RUNTIMESECRET-"
+        "redact-test-12345678"
+    )
+    secret_env = (
+        "PLANNER_TEST_with_sk-runtime-env-secret-redact-test-12345678"
+    )
+    run_dir = _make_minimal_run(
+        tmp_path,
+        env="development",
+        provider_runtime={
+            "model": secret_model,
+            "base_url": secret_url,
+            "api_key_env": secret_env,
+            "enable_real_model_calls": True,
+        },
+    )
+    report = diagnose_run_dir(run_dir)
+    runtime = report.provider.runtime
+    assert runtime is not None
+    serialized = json.dumps(report.model_dump(mode="json"))
+
+    # Each injected token must NOT appear anywhere in the report.
+    assert secret_model not in serialized
+    assert "RUNTIMESECRET-redact-test-12345678" not in serialized
+    assert "sk-runtime-env-secret-redact-test-12345678" not in serialized
+
+    # And the redacted strings must appear in the runtime fields.
+    assert runtime.model and "sk-runtime-model-secret-redact-test" not in runtime.model
+    assert runtime.base_url and "RUNTIMESECRET" not in runtime.base_url
+    assert runtime.api_key_env and "sk-runtime-env-secret-redact-test" not in runtime.api_key_env
+
+
+def test_r8_dev_message_redacts_api_key_env_name(tmp_path: Path, monkeypatch) -> None:
+    """P1 fix (Codex manual review round 2): R8 dev branch used to
+    echo the raw ``api_key_env`` env-var name (e.g.
+    ``'PLANNER_OPENAI_API_KEY'``) into the finding message. Env-var
+    names are not secrets by convention, but a future provider may
+    stuff a token into that field. Run the env-var name through
+    the same redact path as everything else to close the exit.
+
+    We use a synthetic env-var name that contains an OpenAI-style
+    ``sk-...`` token suffix so the redact regex actually fires,
+    demonstrating that the path is exercised end-to-end.
+    """
+    monkeypatch.delenv("PLANNER_TEST_API_KEY_RUNTIME_LEAK", raising=False)
+    run_dir = _make_minimal_run(
+        tmp_path,
+        env="development",
+        provider_runtime={
+            "model": "gpt-4",
+            "base_url": "https://api.openai.com/v1",
+            "api_key_env": (
+                "PLANNER_TEST_API_KEY_sk-leak-test-redact-12345678"
+            ),
+            "enable_real_model_calls": True,
+        },
+    )
+    report = diagnose_run_dir(run_dir)
+    matching = [
+        f for f in report.findings if f.code == "api_key_env_unset"
+    ]
+    assert matching, "expected R8 to fire when api_key_env is unset"
+    msg = matching[0].message
+    # The leak token substring must be redacted.
+    assert "sk-leak-test-redact-12345678" not in msg
+    # And ``<redacted>`` should appear in the message.
+    assert "<redacted>" in msg
+
+
 # ---------- Internal helpers ----------
 
 

@@ -420,8 +420,15 @@ def _rule_r8_api_key_env_unset(
             "production 下已 sanitized 环境变量名，避免日志泄露。"
         )
     else:
+        # P1 fix (Codex manual review round 2): the dev branch used
+        # to echo the raw ``api_key_env`` value (e.g.
+        # ``provider_runtime.api_key_env='PLANNER_OPENAI_API_KEY'``)
+        # into the finding message. Env-var names are not secrets
+        # by convention, but a future provider may stuff a token
+        # into that field. Run the env-var name through the same
+        # redact path as everything else to close the exit.
         message = (
-            f"provider_runtime.api_key_env={api_key_env!r} "
+            f"provider_runtime.api_key_env={_safe_text(repr(api_key_env))} "
             "在当前进程未设置；如需真实调用，请设置该环境变量。"
         )
     findings.append(
@@ -675,11 +682,24 @@ def diagnose_run_dir(
     runtime_raw = summary.get("provider_runtime")
     runtime_summary: Optional[ProviderRuntimeSummary] = None
     if isinstance(runtime_raw, dict):
+        # P1 fix (Codex manual review round 2): every text field
+        # copied from ``provider_runtime`` is run through
+        # ``_safe_text``. ``model`` and ``base_url`` are normally
+        # configuration-only (no secret content), but a future
+        # provider may interpolate a token into either (e.g. a
+        # proxy URL that embeds a Bearer token in the query
+        # string). ``api_key_env`` is the env var NAME (already
+        # safe by convention), but the redact regexes never match
+        # ``PLANNER_*``-style identifiers, so running them is a
+        # free defense-in-depth. ``enable_real_model_calls`` is
+        # bool and doesn't need redact.
         runtime_summary = ProviderRuntimeSummary(
-            model=str(runtime_raw.get("model") or ""),
-            base_url=str(runtime_raw.get("base_url") or ""),
-            api_key_env=str(runtime_raw.get("api_key_env") or ""),
-            enable_real_model_calls=bool(runtime_raw.get("enable_real_model_calls")),
+            model=_safe_text(runtime_raw.get("model") or ""),
+            base_url=_safe_text(runtime_raw.get("base_url") or ""),
+            api_key_env=_safe_text(runtime_raw.get("api_key_env") or ""),
+            enable_real_model_calls=bool(
+                runtime_raw.get("enable_real_model_calls")
+            ),
         )
     report.provider = ProviderSummary(
         requested=summary.get("requested_provider"),
