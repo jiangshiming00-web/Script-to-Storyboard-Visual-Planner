@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+UNKNOWN.egg-info/
+script_to_storyboard_planner.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# pytest / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenv
+.venv/
+venv/
+
+# Env / secrets (NEVER commit real keys / production config)
+.env
+.env.*
+!.env.example
+*.env.production
+
+# Project-specific (matches HANDOFF.md "下一步建议 #6"):
+# runs/ 只保留根 .gitkeep；任何 run 都走 CLI 显式 --out 路径，
+# production smoke 永远走 /tmp。所以 runs/development/ / runs/production/ /
+# runs/linked_target (test 残留) 一律忽略。
+runs/*
+!runs/.gitkeep
+
+# logs/ assets/ data/ 是开发期常态产物目录：
+# 保留子目录里的 .gitkeep 占位，其他内容忽略。
+logs/**
+!logs/**/.gitkeep
+assets/**
+!assets/**/.gitkeep
+data/**
+!data/**/.gitkeep
+
+# Sample input scripts（dev only, 与 config/development.json 配对）
+!data/development/input_scripts/sample_ep*.txt
+
+# Hard rule: production config NEVER committed
+config/production.json
+config/production.*.json
+!config/production.example.json
