@@ -141,14 +141,15 @@ def test_cli_diagnose_dev_repo_internal_warns_and_allows(tmp_path: Path) -> None
 # ---------- stub commands ----------
 
 
-def test_cli_review_run_stub_returns_not_implemented_exit_zero(tmp_path: Path) -> None:
+def test_cli_review_run_dev_run_returns_full_exit_zero(tmp_path: Path) -> None:
     run_dir = _make_dev_run(tmp_path)
     rc, out, err = _run_cli("agent", "review-run", str(run_dir))
     assert rc == 0, f"stderr: {err[-500:]}"
     data = json.loads(out)
-    assert data["implementation_status"] == "not_implemented"
-    assert data["tool_invocations"] == []
-    assert data["status"] == "ok"
+    assert data["implementation_status"] == "full"
+    assert data["review_version"] == "1.0"
+    assert len(data["tool_invocations"]) > 0
+    assert data["status"] in {"ok", "warnings"}
     assert "Traceback" not in err
 
 

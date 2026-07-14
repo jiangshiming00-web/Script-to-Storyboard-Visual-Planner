@@ -97,17 +97,28 @@ def _check_and_write_report(
     click.echo(f"report written to {report_path}", err=True)
 
 
-def _render_markdown(report_dict: Dict[str, Any]) -> None:
-    """Render the report as Markdown to stdout."""
+def _render_markdown(
+    report_dict: Dict[str, Any], *, title: str = "Diagnose Report"
+) -> None:
+    """Render the report as Markdown to stdout.
+
+    ``title`` lets review-run reuse this renderer; the version field
+    label follows whichever version key the report carries
+    (``diagnose_version`` or ``review_version``) so diagnose output is
+    unchanged.
+    """
+    version_key = (
+        "diagnose_version" if "diagnose_version" in report_dict else "review_version"
+    )
     lines: list[str] = [
-        f"# Diagnose Report — {report_dict.get('run_dir', '?')}",
+        f"# {title} - {report_dict.get('run_dir', '?')}",
         "",
         f"- **run_id**: `{report_dict.get('run_id')}`",
         f"- **env**: `{report_dict.get('env')}`",
         f"- **status**: `{report_dict.get('status')}`",
         f"- **implementation_status**: "
         f"`{report_dict.get('implementation_status')}`",
-        f"- **diagnose_version**: `{report_dict.get('diagnose_version')}`",
+        f"- **{version_key}**: `{report_dict.get(version_key)}`",
         "",
         "## Summary",
         "",
@@ -251,53 +262,84 @@ def diagnose_cmd(
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
+    "--expected-env",
+    type=click.Choice(["development", "production"]),
+    default=None,
+    help=(
+        "If given, review checks run_summary.env against this value "
+        "and emits an env_mismatch finding when they differ."
+    ),
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["json", "markdown"]),
+    default="json",
+    help="Output format (default: json).",
+)
+@click.option(
     "--write-report",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Write the placeholder report to this path.",
+    help=(
+        "Write the report to this path. Default: stdout. Production "
+        "runs refuse to write inside the project repo."
+    ),
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Also emit the Chinese summary on stderr.",
 )
 @click.pass_context
 def review_run_cmd(
     ctx: click.Context,
     run_dir: Path,
+    expected_env: Optional[str],
+    fmt: str,
     write_report: Optional[Path],
+    verbose: bool,
 ) -> None:
-    """[Phase 3 P1 STUB] Cross-episode review of a single run.
+    """Review a single run's prompt-bible consistency (read-only).
 
-    This command is a placeholder. It returns a DiagnoseReport with
-    ``implementation_status="not_implemented"`` and does NOT touch
-    the run directory. Use ``planner agent diagnose`` for actual
-    diagnostics.
+    RUN_DIR is the path produced by ``planner run`` (a directory
+    containing ``run_summary.json``). Checks image / video prompts
+    against the bibles (character / location / prop) and emits a
+    ReviewRunReport. Does NOT write run artifacts. Cross-episode
+    consistency is ``review-batch``'s job.
     """
-    from planner.agent.diagnose import build_not_implemented_report
+    from planner.agent.review import review_run_dir
 
     project_root = _resolve_project_root(ctx)
-    report = build_not_implemented_report(kind="review-run", target=str(run_dir))
+    try:
+        report = review_run_dir(run_dir, expected_env=expected_env)
+    except PlannerError as exc:
+        click.echo(click.style(f"agent error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+    except OSError as exc:
+        click.echo(click.style(f"agent error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
     report_dict = report.model_dump(mode="json")
 
     if write_report is not None:
         _check_and_write_report(report_dict, write_report, project_root)
 
-    _echo_json(report_dict)
-    click.echo(
-        click.style(
-            "\nNOTE: planner agent review-run 尚未在 Phase 3 P1 实现；"
-            "如需诊断请使用 `planner agent diagnose`。",
-            fg="yellow",
-        ),
-        err=True,
-    )
-    # Explicit about why a stub report has env="production" by default:
-    # the write-report policy treats unknown env as production (fail-closed).
-    click.echo(
-        click.style(
-            "INFO: stub report env defaults to 'production' for "
-            "--write-report policy transparency; override by editing "
-            "the JSON if needed.",
-            fg="cyan",
-        ),
-        err=True,
-    )
+    if fmt == "json":
+        _echo_json(report_dict)
+    else:
+        _render_markdown(report_dict, title="Review Report")
+
+    if verbose or fmt == "markdown":
+        click.echo(click.style("\n摘要：", fg="cyan"), err=True)
+        click.echo(report.summary, err=True)
+
+    # errors -> 1, else 0. Policy refusal is rc=2 inside
+    # _check_and_write_report and never reaches here.
+    if report.status == "errors":
+        sys.exit(1)
     sys.exit(0)
 
 
