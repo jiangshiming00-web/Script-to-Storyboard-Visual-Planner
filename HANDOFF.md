@@ -1,8 +1,8 @@
 # Handoff
 
-## 当前状态（2026-07-13 - Phase 0 + Phase 3 P1 完工）
+## 当前状态（2026-07-14 - Phase 0 + Phase 3 P1/P1.5/P1.6 完工 + status cleanup 收口）
 
-按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分（产品内 agent read-only / guided）首次落地，配套 Phase 0 (git init + baseline)。**用户已批准的边界（9 条）全部守住**：不接 LLM / 不接 executor / 不增加必需 SDK / 不静默放宽红线 / 不写仓内产物（production）/ 不保存 API key / 不执行任意 shell / 不接 GUI RunRegistry / review-run + review-batch 留 stub。
+按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分（产品内 agent read-only / guided）首次落地，配套 Phase 0 (git init + baseline)。**用户已批准的边界（9 条）全部守住**：不接 LLM / 不接 executor / 不增加必需 SDK / 不静默放宽红线 / 不写仓内产物（production）/ 不保存 API key / 不执行任意 shell / 不接 GUI RunRegistry / review-run + review-batch 留 stub。Phase 3 P1 骨架 + P1.5（4 findings）/ P1.6（5 findings + status cleanup）三轮 Codex 手工复审均已通过；347 pytest 全绿。
 
 ### Phase 0 — git init + baseline
 
@@ -76,7 +76,7 @@ planner/agent/
 ### Red line 守门（与 Phase 2 一致 + 新增）
 
 - `pyproject.toml [project]` 基础依赖**未动**：仍只 `pydantic + click`。
-- 339 pytest = 271 baseline + 68 新增 agent tests，**零回归**。
+- 347 pytest = 271 baseline + 76 新增 agent tests，**零回归**。
 - 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
 - production fail-closed contract 保留（R1 / R4 / R7 + `--write-report` 政策 + `is_inside_repo` 共享 helper）。
 - API key 永不写盘：redact 覆盖所有出口（finding message / summary / stderr / `--write-report` 文件）。
@@ -86,7 +86,6 @@ planner/agent/
 
 ### 下一轮
 
-- **review 子会话（扮演 Codex-style 角色）复审 Phase 3 P1**（重点看 read-only 边界 / `--write-report` 政策 / redact 出口 / 13 条规则与 validate_run 复用切分 / stub 不假装 / harness scenario 形状 / 三件套对齐）。
 - **Phase 3 P2**：`review-run` + `review-batch` 完整实现 + harness scenarios 加覆盖 + GUI agent 面板（按"核心先于壳层"原则排在最后）。
 - **Phase 0 git push to GitHub**（blocked on user URL）。
 - **opt-in probe**（与 `health_check` 严格分离）+ Phase Core-3 跨集连续性 + pkg/CI 路线。

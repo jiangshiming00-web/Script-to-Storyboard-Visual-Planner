@@ -2,6 +2,52 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P1.6 status cleanup round 3 - Codex 手工复审第三轮 4 findings 收口)
+
+### Background
+
+用户（shiming jiang）作为 Codex 手工对手方对 Phase 3 P1.6 status cleanup（commit `afea771`）做**第三轮手工 Codex 复审**。verdict **暂不建议进入下一步**：4 个 stale 点方向对但状态入口未完全收口。本轮按"很小的 P3/P2 收口"原则全部修齐。
+
+### Findings -> Fixes
+
+#### P2：`PROJECT_STATUS.json` `next_actions` 仍混有大量已完成事项
+
+**Bug**: `next_actions`（机器可读入口）含 61 条，其中大量已完成项（旧 review / Phase 2 harness / P1/P1.5 落地项 / `phase3_p1_339_pytest` / phase0 baseline 等），会误导 Proma/Zcode 下一步。
+
+**Fix**: 精简到 15 条未完成项（Phase 3 P2 五项 + phase0 git push + opt-in probe + core3/core4/core6/pkg1/ci1/zcode/phase3 executor adapter）。`completed_steps` 末尾补 3 条 phase3 里程碑（P1 骨架落地 / P1.5+P1.6 两轮复审 / round3 status cleanup）。
+
+#### P3：`PROJECT_STATUS.json` agent 测试清单与 verification 数字 stale
+
+**Bug**: `artifacts.tests` 清单写 `test_agent_diagnose.py (22 tests...)`，`verification.v10_phase3_p1_test_count` 写 `27 test_agent_diagnose`；上一轮 P1.6 CHANGELOG 拆分写 `5 redact / 25 diagnose` 也错。`pytest --collect-only` ground truth：redact 17 / readers 13 / tools 9 / diagnose 29 / cli 7。
+
+**Fix**: 清单 5 行数字同步到 17/13/9/29/7 + 描述微调；verification 拆分改 `271 baseline + 17 redact + 13 readers + 9 tools + 29 diagnose + 7 cli + 1 boundaries = 347`（无需 overlap 修正，精确等于 347）。
+
+#### P3：`HANDOFF.md` 仍写 339 pytest + 把"复审 Phase 3 P1"列为下一轮
+
+**Bug**: `HANDOFF.md` 写 `339 pytest = 271 + 68`，且"下一轮"第一条仍是"复审 Phase 3 P1"--与当前复审状态冲突（P1/P1.5/P1.6 已复审完）。
+
+**Fix**: 标题改 `2026-07-14 + P1/P1.5/P1.6 + status cleanup`；首段补"P1.5/P1.6 三轮 Codex 手工复审均已通过；347 pytest 全绿"；测试数改 `347 = 271 + 76`；"下一轮"删除"复审 Phase 3 P1"条目，保留 Phase 3 P2 / phase0 push / opt-in probe。
+
+#### P3 / 卫生项：`tests/test_boundaries.py` symlink 测试在真实仓库 `runs/` 下残留 `linked_target`
+
+**Bug**: `test_is_inside_repo_helper` 的 `link_target = project_root / "runs" / "linked_target"` + `mkdir` 会在真实仓库 `runs/` 下创建目录，跑完残留（被 `.gitignore` 忽略故 `git status` 干净，但违背"`runs/` 只保留根 `.gitkeep`"红线描述）。
+
+**Fix**: `link_target` 改用 repo 内已存在路径（`project_root` 本身），删 `mkdir`。`is_inside_repo` docstring 明确 path 不存在会抛 OSError，故 target 必须预先存在；复用 repo 根既满足语义（symlink 指向 repo 内 -> resolve 跟随 -> inside）又不产生残留。手动删除磁盘上已残留的 `runs/linked_target`。
+
+### Verification
+
+- `python3 -m pytest tests/test_boundaries.py` -- 11 passed，`runs/` 仅剩 `.gitkeep`。
+- `python3 -m pytest --collect-only -q` -- 347 tests collected（agent: redact 17 / readers 13 / tools 9 / diagnose 29 / cli 7 = 75；+ 271 baseline + 1 phase3 boundaries）。
+- `PROJECT_STATUS.json` -- JSON 合法；`next_actions` 15 条；拆分总和 347。
+- `git status` -- 干净（`runs/linked_target` 已删且不再生成）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 仓库 `runs/` 仍只含根 `.gitkeep`（symlink 测试不再残留）。
+- production fail-closed contract 保留（本轮只改文档/状态/测试卫生，零代码逻辑改动）。
+- API key redaction 出口未动（本轮无 diagnose/redact 代码改动）。
+
 ## 2026-07-13 (Proma Phase 3 P1.6 — Codex 手工复审第二轮 5 findings 修齐)
 
 ### Background

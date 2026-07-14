@@ -205,11 +205,15 @@ def test_is_inside_repo_helper(project_root: Path, tmp_path: Path) -> None:
     outside.mkdir(parents=True, exist_ok=True)
     assert is_inside_repo(outside, project_root) is False
     # Symlink inside repo: ``resolve()`` follows the link, so this
-    # still counts as inside.
+    # still counts as inside. The link target reuses an existing
+    # repo-internal path (the repo root itself) so the test never
+    # creates a leftover directory under ``runs/`` -- ``runs/`` must
+    # keep only the root ``.gitkeep`` (red line). ``is_inside_repo``
+    # resolves before its check and raises if the target is missing,
+    # so the target must pre-exist.
     link_dir = tmp_path / "external" / "link"
     link_dir.mkdir(parents=True, exist_ok=True)
-    link_target = project_root / "runs" / "linked_target"
-    link_target.mkdir(parents=True, exist_ok=True)
+    link_target = project_root
     symlink = tmp_path / "external" / "back_to_repo"
     if not symlink.exists():
         symlink.symlink_to(link_target)
