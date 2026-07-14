@@ -46,8 +46,8 @@ venv/
 
 # Project-specific (matches HANDOFF.md "下一步建议 #6"):
 # runs/ 只保留根 .gitkeep；任何 run 都走 CLI 显式 --out 路径，
-# production smoke 永远走 /tmp。所以 runs/development/ / runs/production/ /
-# runs/linked_target (test 残留) 一律忽略。
+# production smoke 永远走 /tmp。所以 runs/development/ / runs/production/
+# 等子目录一律忽略。
 runs/*
 !runs/.gitkeep
 
