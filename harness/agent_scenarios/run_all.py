@@ -27,10 +27,14 @@ two checks:
    ``provider_runtime.*`` and asserts the raw tokens do NOT appear
    in stdout / --write-report file / stderr (closed after Codex
    found the ``provider_runtime`` exit was unredacted); the
-   review_* scenarios assert ``implementation_status =
-   "not_implemented"`` + empty ``tool_invocations``. This catches
-   real runtime defects (e.g. secret leak in newly added exit
-   surfaces) that static shape + artifact existence cannot.
+   review_* scenarios split: ``review_prompt_refs`` (review-run,
+   Phase 3 P2 full) asserts ``implementation_status = "full"`` +
+   ``review_version = "1.0"`` + non-empty ``tool_invocations``;
+   ``batch_continuity`` (review-batch, still a stub) asserts
+   ``implementation_status = "not_implemented"`` + empty
+   ``tool_invocations``. This catches real runtime defects (e.g.
+   secret leak in newly added exit surfaces) that static shape +
+   artifact existence cannot.
 
 The runner does NOT trigger any write actions (it reads the
 generated run dir and invokes the read-only ``planner agent
@@ -242,7 +246,7 @@ def validate_live_agent_replay(
     ``planner agent diagnose`` is implemented, the diagnose / review
     scenarios should run the real CLI and assert the output.
 
-    Coverage matrix (Phase 3 P1.5):
+    Coverage matrix (Phase 3 P1.5; review-run updated P2):
 
     * ``diagnose_*`` scenarios: run ``planner agent diagnose
       <sample_run_dir>`` on a fresh dev run; assert exit code 0,
@@ -250,10 +254,14 @@ def validate_live_agent_replay(
       and (for ``diagnose_secret_redaction``) the stdout / the
       ``--write-report`` file / the stderr contain NO raw secret
       tokens.
-    * ``review_prompt_refs`` / ``batch_continuity``: run the stub
-      command (``review-run`` / ``review-batch``) and assert exit
-      code 0, ``implementation_status="not_implemented"``, and
-      ``tool_invocations=[]``.
+    * ``review_prompt_refs``: run ``planner agent review-run``
+      (Phase 3 P2 full implementation) and assert exit code 0/1,
+      ``implementation_status="full"``, ``review_version="1.0"``,
+      non-empty ``tool_invocations``, and every finding carries
+      evidence.
+    * ``batch_continuity``: run the ``review-batch`` stub and
+      assert exit code 0, ``implementation_status="not_implemented"``,
+      and ``tool_invocations=[]``.
     * ``approval_required_write``: shape-only (already gated by
       :func:`validate_approval_gate_shape`).
     """
@@ -413,8 +421,9 @@ def validate_live_agent_replay(
         return
 
     # ------------------------------------------------------------------
-    # review_* scenarios (Phase 3 P1 stubs): run the stub command
-    # and assert it does no real work.
+    # review_* scenarios: review-run is a Phase 3 P2 full
+    # implementation; review-batch is still a stub. The branches
+    # below assert the right contract for each.
     # ------------------------------------------------------------------
     if cat == "review":
         if "batch_continuity" in name:

@@ -229,3 +229,37 @@ def test_cli_review_batch_stub_returns_not_implemented_exit_zero(tmp_path: Path)
     assert data["implementation_status"] == "not_implemented"
     assert data["tool_invocations"] == []
     assert "Traceback" not in err
+
+
+def test_cli_review_run_corrupted_artifact_no_traceback(tmp_path: Path) -> None:
+    """P1 regression: a legitimate-JSON / wrong-shape artifact must not
+    leak a traceback. image_prompts.json as a bare list -> the engine
+    emits an artifact_corrupted finding and the CLI exits cleanly with
+    valid JSON (no AttributeError on stderr).
+    """
+    run_dir = _make_dev_run(tmp_path)
+    (run_dir / "image_prompts.json").write_text("[1, 2, 3]", encoding="utf-8")
+    rc, out, err = _run_cli("agent", "review-run", str(run_dir))
+    assert rc in (0, 1), f"rc={rc}; stderr: {err[-500:]}"
+    assert "Traceback" not in err
+    assert "AttributeError" not in err
+    data = json.loads(out)
+    assert data["implementation_status"] == "full"
+    codes = [f["code"] for f in data["findings"]]
+    assert "artifact_corrupted" in codes
+
+
+def test_cli_review_run_corrupted_run_summary_no_traceback(tmp_path: Path) -> None:
+    """P1 regression: run_summary.json as a bare list must not leak a
+    traceback; the CLI emits corrupted_run_summary and exits 1.
+    """
+    run_dir = _make_dev_run(tmp_path)
+    (run_dir / "run_summary.json").write_text("[1, 2, 3]", encoding="utf-8")
+    rc, out, err = _run_cli("agent", "review-run", str(run_dir))
+    assert rc == 1, f"rc={rc}; stderr: {err[-500:]}"
+    assert "Traceback" not in err
+    assert "AttributeError" not in err
+    data = json.loads(out)
+    assert data["status"] == "errors"
+    codes = [f["code"] for f in data["findings"]]
+    assert "corrupted_run_summary" in codes

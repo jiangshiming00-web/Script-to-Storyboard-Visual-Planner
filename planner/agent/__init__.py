@@ -6,12 +6,13 @@ anything back (except via the explicit ``--write-report`` opt-in
 on the CLI). It does **not** call any LLM, does not execute any
 shell command, and does not save API keys.
 
-Phase 3 P1 exposes a single fully-implemented command
-(``planner agent diagnose``) plus two stubs
-(``planner agent review-run`` / ``planner agent review-batch``).
-The P2 will flesh out the review-* commands; the contracts for
-both are encoded in :mod:`planner.agent.diagnose` and the
-:mod:`planner.agent.tools` registry.
+Phase 3 P1 exposes ``planner agent diagnose`` (fully implemented).
+Phase 3 P2 promotes ``planner agent review-run`` from stub to a
+fully implemented prompt-bible consistency review.
+``planner agent review-batch`` remains a stub. The contracts for
+all three are encoded in :mod:`planner.agent.diagnose` /
+:mod:`planner.agent.review` and the :mod:`planner.agent.tools`
+registry.
 
 Public surface (use these from the CLI; do not import internals):
 

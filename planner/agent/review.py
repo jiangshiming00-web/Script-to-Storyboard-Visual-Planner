@@ -200,6 +200,26 @@ def _read_artifact_safe(
             ToolInvocation(tool="read_artifact", ok=False, artifact_refs=[f"{name}.json"], bytes_read=0)
         )
         return None
+    # Legitimate JSON but the top level is not a JSON object (e.g. a
+    # bare list / string / int / bool). review-run indexes every
+    # artifact as a dict, so a non-dict top level would raise
+    # ``AttributeError`` on the downstream ``.get(...)`` calls and leak
+    # a traceback through the CLI (the ``except KeyError`` /
+    # ``PlannerError`` guards do not catch ``AttributeError``). Treat
+    # it as corrupted so the run degrades gracefully and dependent
+    # rules skip. See Codex Phase 3 P2 review (P1).
+    if not isinstance(payload, dict):
+        _add_finding(
+            findings,
+            "warning",
+            "artifact_corrupted",
+            f"{name}.json 顶层不是 JSON 对象（{type(payload).__name__}）；依赖该产物的规则已跳过。",
+            [EvidenceRef(artifact=f"{name}.json", path=str(path), locator="$")],
+        )
+        tool_invocations.append(
+            ToolInvocation(tool="read_artifact", ok=False, artifact_refs=[f"{name}.json"], bytes_read=0)
+        )
+        return None
     bytes_read = path.stat().st_size if path.is_file() else 0
     tool_invocations.append(
         ToolInvocation(tool="read_artifact", ok=True, artifact_refs=[f"{name}.json"], bytes_read=bytes_read)
@@ -227,10 +247,21 @@ def _find_placeholders(text: str) -> List[str]:
     return hits
 
 
-# Header format (planner/prompts.py:51-57):
+# Header format (planner/prompts.py:51-57): the generator emits
 #   场景：{loc.name}。人物：{ch.name}。道具：{pr.name}。
-# Multiple characters / props produce multiple matches. Names may be
-# concatenated with 、 or , if a human edits the prompt, so split on both.
+# in fixed 场景 -> 人物 -> 道具 order, one segment per bible entry
+# (one 场景 if the shot has a location, one 人物 per character, one
+# 道具 per prop). Header and body share the ``。`` separator with no
+# newline, so rv1 cannot rely on a structural boundary.
+# ``_parse_prompt_header`` consumes exactly the expected count of each
+# label from the start (``consumed``) and collects any further
+# 场景：/人物：/道具： segments into ``extra``. ``_rule_rv1`` then flags
+# an extra segment as a phantom only when its name hits a known bible
+# entry the shot does not reference; body prose whose label-prefixed
+# name matches no bible entry (e.g. "人物：背景群众只是画面描述") is
+# ignored. This catches real phantoms (人物：张楠 / 道具：文件夹 where
+# the name is in the bible) without flagging body prose. See Codex
+# Phase 3 P2 round-3 review (P2 direction E).
 _SCENE_RE = re.compile(r"场景：([^。]*)")
 _CHAR_RE = re.compile(r"人物：([^。]*)")
 _PROP_RE = re.compile(r"道具：([^。]*)")
@@ -246,15 +277,57 @@ def _split_names(raw: List[str]) -> List[str]:
     return out
 
 
-def _parse_header_names(prompt: str) -> Dict[str, List[str]]:
-    """Extract scene / character / prop names from a prompt header."""
+def _parse_prompt_header(
+    prompt: str,
+    *,
+    n_scene: int,
+    n_char: int,
+    n_prop: int,
+) -> tuple:
+    """Parse a prompt header into consumed + extra name buckets.
+
+    Consumes exactly ``n_scene`` ``场景：`` segments, then ``n_char``
+    ``人物：`` segments, then ``n_prop`` ``道具：`` segments, from the
+    start of the prompt (matching the generator emit order). Each label
+    is consumed independently: a missing segment for one label does not
+    block consuming the next label.
+
+    Segments past the expected count are split:
+
+    * those still starting with a header label (``场景：`` / ``人物：`` /
+      ``道具：``) are collected into ``extra`` - candidates for the
+      bible-name phantom check. A name that hits a known bible entry
+      but is not in the shot's refs is a phantom; a name that matches
+      no bible entry is body prose and ignored.
+    * non-label segments are body prose and ignored.
+
+    Returns ``(consumed, extra)``. See Codex Phase 3 P2 round-3 review.
+    """
+    empty = {"scene": [], "character": [], "prop": []}
     if not prompt:
-        return {"scene": [], "character": [], "prop": []}
-    return {
-        "scene": _split_names(_SCENE_RE.findall(prompt)),
-        "character": _split_names(_CHAR_RE.findall(prompt)),
-        "prop": _split_names(_PROP_RE.findall(prompt)),
-    }
+        return empty, empty
+    segments = [s.strip() for s in prompt.split("。") if s.strip()]
+    consumed: Dict[str, List[str]] = {"scene": [], "character": [], "prop": []}
+    extra: Dict[str, List[str]] = {"scene": [], "character": [], "prop": []}
+    idx = 0
+    while len(consumed["scene"]) < n_scene and idx < len(segments) and segments[idx].startswith("场景："):
+        consumed["scene"].extend(_split_names(_SCENE_RE.findall(segments[idx])))
+        idx += 1
+    while len(consumed["character"]) < n_char and idx < len(segments) and segments[idx].startswith("人物："):
+        consumed["character"].extend(_split_names(_CHAR_RE.findall(segments[idx])))
+        idx += 1
+    while len(consumed["prop"]) < n_prop and idx < len(segments) and segments[idx].startswith("道具："):
+        consumed["prop"].extend(_split_names(_PROP_RE.findall(segments[idx])))
+        idx += 1
+    for seg in segments[idx:]:
+        if seg.startswith("场景："):
+            extra["scene"].extend(_split_names(_SCENE_RE.findall(seg)))
+        elif seg.startswith("人物："):
+            extra["character"].extend(_split_names(_CHAR_RE.findall(seg)))
+        elif seg.startswith("道具："):
+            extra["prop"].extend(_split_names(_PROP_RE.findall(seg)))
+        # else: body prose (no header label) - ignore
+    return consumed, extra
 
 
 # ---------- Rules ----------
@@ -275,6 +348,14 @@ def _rule_rv1_image_prompt_bible_ref(
     absent from the header) + phantom (header names an entry the shot
     does not reference).
     """
+    # All known bible names (for the extra-segment phantom check):
+    # a header-label segment past the expected count whose name hits a
+    # known bible entry but is not in the shot's refs is a phantom; a
+    # name that matches no bible entry is body prose and ignored.
+    char_names_all = {c.get("name") for c in char_index.values() if c.get("name")}
+    loc_names_all = {l.get("name") for l in loc_index.values() if l.get("name")}
+    prop_names_all = {p.get("name") for p in prop_index.values() if p.get("name")}
+
     for shot in shots:
         sid = shot.get("id")
         if sid is None:
@@ -283,58 +364,92 @@ def _rule_rv1_image_prompt_bible_ref(
         if not ip:
             continue  # rv4 handles shot_id misalignment
         prompt = ip.get("prompt") or ""
-        header = _parse_header_names(prompt)
 
         loc_id = shot.get("location_id")
         expected_loc = [loc_index[loc_id]["name"] for loc_id in [loc_id] if loc_id and loc_id in loc_index and loc_index[loc_id].get("name")]
         expected_char = [char_index[c]["name"] for c in (shot.get("character_ids") or []) if c in char_index and char_index[c].get("name")]
         expected_prop = [prop_index[p]["name"] for p in (shot.get("prop_ids") or []) if p in prop_index and prop_index[p].get("name")]
 
+        # Parse the header into (consumed, extra): consumed = the first
+        # expected-count segments in 场景->人物->道具 order; extra =
+        # remaining segments that still start with a header label
+        # (candidates for the bible-name phantom check). Non-label
+        # segments are body prose. See Codex Phase 3 P2 round-3 review.
+        consumed, extra = _parse_prompt_header(
+            prompt,
+            n_scene=1 if expected_loc else 0,
+            n_char=len(expected_char),
+            n_prop=len(expected_prop),
+        )
+
         ev = [
             EvidenceRef(artifact="image_prompts.json", path=str(run_dir / "image_prompts.json"), locator=f"$.image_prompts[?(@.shot_id=='{sid}')].prompt"),
             EvidenceRef(artifact="shot_list.json", path=str(run_dir / "shot_list.json"), locator=f"$.shots[?(@.id=='{sid}')]"),
         ]
 
-        # Missing refs (shot references a bible entry not in header)
+        # Missing refs (shot references a bible entry not in consumed header)
         if expected_loc:
-            missing = [n for n in expected_loc if n not in header["scene"]]
+            missing = [n for n in expected_loc if n not in consumed["scene"]]
             if missing:
                 _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                              f"shot {sid} 的 image prompt header 缺少场景引用：{missing}（shot 引用 location 但 prompt 未声明）。",
                              ev)
         if expected_char:
-            missing = [n for n in expected_char if n not in header["character"]]
+            missing = [n for n in expected_char if n not in consumed["character"]]
             if missing:
                 _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                              f"shot {sid} 的 image prompt header 缺少人物引用：{missing}（shot 引用角色但 prompt 未声明）。",
                              ev)
         if expected_prop:
-            missing = [n for n in expected_prop if n not in header["prop"]]
+            missing = [n for n in expected_prop if n not in consumed["prop"]]
             if missing:
                 _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                              f"shot {sid} 的 image prompt header 缺少道具引用：{missing}（shot 引用道具但 prompt 未声明）。",
                              ev)
 
-        # Phantom refs (header names an entry the shot does not reference)
-        phantom_scene = [n for n in header["scene"] if n not in expected_loc]
+        # Phantom refs - consumed header names an entry the shot does not reference
+        phantom_scene = [n for n in consumed["scene"] if n not in expected_loc]
         if phantom_scene:
             _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                          f"shot {sid} 的 image prompt header 声明了场景 {phantom_scene}，但 shot_list 未引用对应 location。",
                          ev)
-        phantom_char = [n for n in header["character"] if n not in expected_char]
+        phantom_char = [n for n in consumed["character"] if n not in expected_char]
         if phantom_char:
             _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                          f"shot {sid} 的 image prompt header 声明了人物 {phantom_char}，但 shot_list 未引用对应角色。",
                          ev)
-        phantom_prop = [n for n in header["prop"] if n not in expected_prop]
+        phantom_prop = [n for n in consumed["prop"] if n not in expected_prop]
         if phantom_prop:
             _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                          f"shot {sid} 的 image prompt header 声明了道具 {phantom_prop}，但 shot_list 未引用对应道具。",
                          ev)
 
+        # Extra phantom: header-label segments past the expected count
+        # whose name hits a known bible entry but is not in the shot's
+        # refs. Body prose that starts with a header label but names no
+        # bible entry (e.g. "人物：背景群众只是画面描述") is ignored,
+        # so body prose cannot trigger a false phantom while a real
+        # phantom (header names a known bible entry the shot does not
+        # reference) is still caught. See Codex round-3 review.
+        for name in extra["scene"]:
+            if name in loc_names_all and name not in expected_loc:
+                _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
+                             f"shot {sid} 的 image prompt header 声明了场景 [{name}]，但 shot_list 未引用对应 location。",
+                             ev)
+        for name in extra["character"]:
+            if name in char_names_all and name not in expected_char:
+                _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
+                             f"shot {sid} 的 image prompt header 声明了人物 [{name}]，但 shot_list 未引用对应角色。",
+                             ev)
+        for name in extra["prop"]:
+            if name in prop_names_all and name not in expected_prop:
+                _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
+                             f"shot {sid} 的 image prompt header 声明了道具 [{name}]，但 shot_list 未引用对应道具。",
+                             ev)
+
         # No reference at all
         if not expected_loc and not expected_char and not expected_prop:
-            if not header["scene"] and not header["character"] and not header["prop"]:
+            if not consumed["scene"] and not consumed["character"] and not consumed["prop"]:
                 _add_finding(findings, "warning", "rv1_image_prompt_bible_ref_mismatch",
                              f"shot {sid} 的 image prompt 无任何 场景/人物/道具 引用，且 shot_list 也无 bible 引用。",
                              ev)
@@ -486,6 +601,29 @@ def review_run_dir(
                 severity="error",
                 code=code,
                 message=_safe_text(message),
+                evidence=[EvidenceRef(artifact="run_summary.json", path=str(run_dir / "run_summary.json"), locator="$")],
+            )
+        )
+        report.tool_invocations.append(
+            ToolInvocation(tool="read_run_summary", ok=False, artifact_refs=["run_summary.json"], bytes_read=0)
+        )
+        report.summary = _build_summary_zh(report)
+        return report.derive_status()
+
+    # Legitimate JSON but top level not a dict (e.g. a bare list /
+    # string / int). ``read_run_summary`` only guards ``data is None``,
+    # so a non-dict top level reaches here and the ``summary.get(...)``
+    # calls below would raise ``AttributeError`` (not caught by
+    # ``except KeyError``) and leak a traceback. Treat as corrupted.
+    # See Codex Phase 3 P2 review (P1).
+    if not isinstance(summary, dict):
+        report.findings.append(
+            DiagnoseFinding(
+                severity="error",
+                code="corrupted_run_summary",
+                message=_safe_text(
+                    f"run_summary.json 顶层不是 JSON 对象（{type(summary).__name__}）；agent 将输出最小化报告。"
+                ),
                 evidence=[EvidenceRef(artifact="run_summary.json", path=str(run_dir / "run_summary.json"), locator="$")],
             )
         )

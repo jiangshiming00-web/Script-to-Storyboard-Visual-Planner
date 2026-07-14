@@ -1,5 +1,89 @@
 # Handoff
 
+## 当前状态（2026-07-14 - Phase 3 P2 review-run Codex 第四轮复审通过，可提交）
+
+Codex 第四轮复审 verdict 可以提交。顺手修了 `review.py:250` 顶部注释的 round2 旧语义。三轮 P2 演进收口（方向 E 终态）。
+
+### 下一轮
+
+- **Phase 3 P2 review-batch 完整实现**（bible merge across episodes，cross-episode 一致性）。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
+## 当前状态（2026-07-14 - Phase 3 P2 review-run Codex 第三轮复审修复 P2 方向 E）
+
+Codex 第三轮复审第二轮修复后 verdict 仍不提交：P1/P3 收口，但 P2 方向2 过度修复漏掉真实 phantom。本轮采用 Codex 建议方向 E 恢复 bidirectional contract。
+
+### 修复
+
+- **P1 通过 / P3 通过**：非 dict 顶层 traceback 守卫 + `__init__.py` stub 文档均已收口。
+- **P2（方向 E）**：`_consume_header_names` -> `_parse_prompt_header` 返回 `(consumed, extra)`。consumed = 前 expected 段；extra = 超出 expected 的 header label 段。`_rule_rv1` 加 extra phantom：extra 段 name 命中 bible 已知 name 且不在 expected -> 报 phantom；不命中 -> body 忽略。bible name 命中判定天然区分真实 header（纯 name）vs body prose（name+描述）。恢复 missing + primary phantom + extra phantom 三层 bidirectional contract。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 391 pytest（389 + 2 Codex 反例），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留。
+- review-batch 仍 stub。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 review-run 第三轮修复**（重点看方向 E extra phantom bible-name 命中 / bidirectional contract 完整性 / 三件套对齐）。
+- **Phase 3 P2 review-batch 完整实现**（复审通过后启动）。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
+## 当前状态（2026-07-14 - Phase 3 P2 review-run Codex 第二轮复审修复 P2/P3）
+
+Codex 第二轮复审第一轮修复后 verdict 暂不提交：P1 已通过，但 P2 原始复现样例仍误报（body 第一段以纯 header label 开头），P3 `__init__.py` 残留。本轮按 Codex 方向2 重写 P2 + 修 P3。
+
+### 修复
+
+- **P1 已通过**：合法 JSON 但顶层非 dict 的 artifact / run_summary 不再泄露 traceback（两处 isinstance 守卫）。
+- **P2（重写）**：删除 `_extract_header` / `_parse_header_names`，新增 `_consume_header_names(prompt, n_scene, n_char, n_prop)`。按生成器 emit 顺序（场景->人物->道具）消费恰好 expected 数量的每个 label 段，剩余同名 label 归 body。彻底处理任意 body-label 开头（含同 label）。trade-off：多段不报 phantom，改为 name 不符报 phantom；`test_rv1_phantom_character` 改为 name-mismatch 语义。
+- **P3（残留）**：`__init__.py:9-14` stale stub 文档清理。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 389 pytest（387 + 2 Codex 复现样例），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留。
+- review-batch 仍 stub。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 review-run 第二轮修复**（重点看方向2 _consume_header_names 边界 / phantom name-mismatch 语义 / Codex 原始复现 + 同 label 变体 / 三件套对齐）。
+- **Phase 3 P2 review-batch 完整实现**（复审通过后启动）。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
+## 当前状态（2026-07-14 - Phase 3 P2 review-run Codex 复审修复 P1/P2/P3）
+
+Codex 手工复审 Phase 3 P2 review-run（commit `43811bc`）后 verdict 暂不进 review-batch，给出 3 findings，本轮全部修齐。
+
+### 修复
+
+- **P1（阻断）graceful / no-traceback**：合法 JSON 但顶层非 dict（list/str/int）的 artifact 不再泄露 `AttributeError` traceback。`_read_artifact_safe` 加 `isinstance(payload, dict)` 守卫（6 个 review artifacts -> `artifact_corrupted` finding）；`review_run_dir` step 0 加 `isinstance(summary, dict)` 守卫（run_summary -> `corrupted_run_summary` error）。两处都走 finding + 跳过依赖规则，CLI 不再出现 traceback。
+- **P2 rv1 header 解析**：新增 `_extract_header`（开头连续 `场景：/人物：/道具：` 段，遇非 header 段停止），`_parse_header_names` 只在 header 子串上跑正则。body 正文里的 `人物：xxx` / `场景：xxx` / `道具：xxx` 不再被误判为 phantom 引用。
+- **P3 stale 文档**：`cli.py` 顶部 + `agent_group` docstring、`run_all.py` 顶部 + `validate_live_agent_replay` Coverage matrix + review_* 代码注释，全部更新为反映 review-run（P2 full）+ review-batch（仍 stub）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 387 pytest（379 + 6 engine + 2 cli），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留；P1 强化 graceful / no-traceback。
+- review-batch 仍 stub（build_not_implemented_report 不动）。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 review-run 修复**（重点看 P1 isinstance 守卫覆盖是否完整 / P2 header 边界是否漏 header 段 / P3 docstring 是否还有遗漏 / 三件套对齐）。
+- **Phase 3 P2 review-batch 完整实现**（bible merge across episodes，cross-episode 一致性）-- 复审通过后启动。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
 ## 当前状态（2026-07-14 - Phase 3 P2 review-run 完工）
 
 Phase 3 P2 第一步：`planner agent review-run` 从 stub 升级为完整实现。review-batch 仍 stub。双轮验证流程（Explore + Plan 子会话）产出 plan，审批后实施。

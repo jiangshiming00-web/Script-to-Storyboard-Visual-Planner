@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-14",
-  "phase": "v10_phase3_p2_review_run_complete",
-  "status": "v10_phase3_p1_complete_p2_review_run_landed",
+  "phase": "v10_phase3_p2_review_run_codex_approved",
+  "status": "v10_phase3_p2_review_run_codex_approved_ready_for_review_batch",
   "owner_plan": {
     "codex": ["architecture_design", "schema_audit", "review", "handoff_docs"],
     "proma": ["implementation", "tests", "bugfixes"],
@@ -117,7 +117,11 @@
     "phase3_p1_product_agent_skeleton_landed_6_files_13_rules_3_click_subcommands",
     "phase3_p1_5_and_p1_6_codex_manual_review_two_rounds_9_findings_fixed",
     "phase3_p1_6_status_cleanup_round3_next_actions_pruned_and_test_counts_synced",
-    "phase3_p2_review_run_landed_4_rules_rv1_rv2_rv3_rv4_full_implementation"
+    "phase3_p2_review_run_landed_4_rules_rv1_rv2_rv3_rv4_full_implementation",
+    "phase3_p2_review_run_codex_fixes_p1_traceback_p2_header_p3_docstring",
+    "phase3_p2_review_run_codex_round2_p2_consume_header_p3_init_doc",
+    "phase3_p2_review_run_codex_round3_p2_direction_e_bible_name_phantom",
+    "phase3_p2_review_run_codex_round4_approved_comment_fix"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -247,7 +251,7 @@
         "planner/agent/readers.py (load_run_summary / load_artifact / list_artifacts / load_batch_summary / list_runs_in_batch; graceful degradation)",
         "planner/agent/diagnose.py (Pydantic models + 13 rules + Chinese summary builder + graceful entry)",
         "planner/agent/tools.py (6 read-only tool functions + TOOL_REGISTRY + TOOL_ARTIFACT_MAP mirroring harness)",
-        "planner/agent/review.py (ReviewRunReport + review_run_dir engine + 4 rules rv1-rv4 + graceful + redact; Phase 3 P2)"
+        "planner/agent/review.py (ReviewRunReport + review_run_dir engine + 4 rules rv1-rv4 + graceful + redact; Phase 3 P2 + Codex round1 P1/P2/P3 + round2 _consume_header_names + round3 P2 direction E _parse_prompt_header consumed+extra + bible-name phantom, restores bidirectional contract)"
       ],
       "diagnostic_rules": [
         "R1 production_fallback_used (delegated to validate_run)",
@@ -269,8 +273,8 @@
         "tests/test_agent_readers.py (13 tests for graceful loads + size cap)",
         "tests/test_agent_tools.py (9 tests for registry alignment + delegation + TOOL_ARTIFACT_MAP sync)",
         "tests/test_agent_diagnose.py (29 tests for 13 rules + status derivation + stub + 5 redact exit surfaces + substring routing)",
-        "tests/test_agent_cli.py (13 subprocess tests: diagnose 7 + review-run 6)",
-        "tests/test_agent_review.py (26 tests for 4 rules rv1-rv4 + graceful + status + tool_invocations + redact)"
+        "tests/test_agent_cli.py (15 subprocess tests: diagnose 5 + review-run 9 + review-batch 1; +2 Codex P1 traceback-guard regression)",
+        "tests/test_agent_review.py (36 tests for 4 rules rv1-rv4 + graceful + status + tool_invocations + redact + Codex P1/P2 regression + round2 repro + round3 expected=0 bible-name phantom regression)"
       ],
       "hard_boundary": "planner/agent/ has no write paths except the explicit --write-report CLI option. --write-report goes through is_inside_repo and refuses production writes inside the repo (mirroring cli.run_cmd policy)."
     },
@@ -507,6 +511,19 @@
     "v10_phase3_p1_cli_subprocess_smoke": "pass (--help shows agent + 3 subcommands; diagnose dev run = exit 0 + JSON to stdout; missing dir = exit 2 + no Traceback in stderr; --write-report /tmp = exit 0 + file 1662 bytes; dev + repo-internal --write-report = exit 0 + WARNING + file; production + repo-internal --write-report = exit 2 + no file; stubs rc=0 + not_implemented)",
     "v10_phase2_no_arbitrary_shell": "pass (harness 自身 subprocess allowlist + agent scenario 显式 forbid execute_arbitrary_shell)",
     "v10_phase2_no_real_os_app_data_pollution": "pass (smoke_gui sets PLANNER_APP_DATA_ROOT + PLANNER_MODEL_CONFIG_PATH; smoke_cli passes --model-config explicit deterministic; smoke_install creates fresh venv; repo runs/ only contains .gitkeep after the rework run)",
-    "v10_phase2_pytest_after_rework": "271 passed (267 base + 3 new is_inside_repo tests in test_boundaries.py + 2 new env-override tests in test_web_run_service.py + others already in baseline); no regressions"
+    "v10_phase2_pytest_after_rework": "271 passed (267 base + 3 new is_inside_repo tests in test_boundaries.py + 2 new env-override tests in test_web_run_service.py + others already in baseline); no regressions",
+    "v10_phase3_p2_codex_fixes_pytest": "387 passed (379 + 6 engine + 2 cli; 0 regression)",
+    "v10_phase3_p2_codex_fixes_scenarios": "pass (7 scenarios; review_prompt_refs full replay, batch_continuity stub)",
+    "v10_phase3_p2_codex_fixes_p1_traceback_guard": "pass (non-dict top-level artifact -> artifact_corrupted / corrupted_run_summary finding, no AttributeError traceback; engine + CLI regression tests)",
+    "v10_phase3_p2_codex_fixes_p2_header_boundary": "pass (_extract_header parses only leading header run; body labels not mistaken for header; 3 regression tests cover scene/character/prop)",
+    "v10_phase3_p2_codex_fixes_p3_docstring": "pass (cli.py + run_all.py stale stub notes cleaned to reflect review-run full + review-batch stub)",
+    "v10_phase3_p2_codex_round2_pytest": "389 passed (387 + 2 Codex repro tests; 0 regression)",
+    "v10_phase3_p2_codex_round2_scenarios": "pass (7 scenarios; review_prompt_refs full replay)",
+    "v10_phase3_p2_codex_round2_p2_consume_header": "pass (direction 2: _consume_header_names drinks expected count per label in scene->char->prop order; body same-label segments past expected count are ignored, so body starting with header label cannot trigger phantom; Codex round-2 repro + same-label variant both no phantom)",
+    "v10_phase3_p2_codex_round2_p3_init_doc": "pass (__init__.py stale two-stubs note cleaned to reflect review-run full + review-batch stub)",
+    "v10_phase3_p2_codex_round3_pytest": "391 passed (389 + 2 Codex round-3 phantom regression; 0 regression)",
+    "v10_phase3_p2_codex_round3_scenarios": "pass (7 scenarios; review_prompt_refs full replay)",
+    "v10_phase3_p2_codex_round3_p2_direction_e": "pass (direction E: _parse_prompt_header returns consumed+extra; extra header-label segment whose name hits a known bible entry but not in expected refs -> phantom; non-bible name -> body. Restores bidirectional missing+phantom contract. Codex round-3 repro 1 shot-no-prop header 道具：文件夹 + repro 2 shot-no-char header 人物：张楠 both flagged; body prose still not flagged)",
+    "v10_phase3_p2_codex_round4_verdict": "approved (P1/P2/P3 blocked items closed; P3 non-blocking header comment synced to direction E semantics)"
   }
 }

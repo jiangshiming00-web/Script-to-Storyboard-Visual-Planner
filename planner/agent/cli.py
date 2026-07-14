@@ -1,23 +1,28 @@
 """Click subcommands for the planner product agent.
 
-Phase 3 P1 ships one fully implemented command (``diagnose``)
-plus two stubs (``review-run`` / ``review-batch``) that return a
-``DiagnoseReport`` with ``implementation_status="not_implemented"``
-so future P2 implementation can plug in without breaking the
-public surface.
+Phase 3 P1 ships ``diagnose`` (fully implemented). Phase 3 P2
+promotes ``review-run`` from stub to a fully implemented
+prompt-bible consistency review. ``review-batch`` remains a stub
+that returns a ``DiagnoseReport`` with
+``implementation_status="not_implemented"`` so a future
+implementation can plug in without breaking the public surface.
 
 Hard rules enforced here:
 
-* No subprocess / shell — agent is a pure-Python CLI.
-* No LLM SDK imports — diagnostic rules are pure-data.
+* No subprocess / shell - agent is a pure-Python CLI.
+* No LLM SDK imports - diagnostic rules are pure-data.
 * ``--write-report`` goes through
   :func:`_check_and_write_report` which respects the
   production repo-internal refuse policy (mirror of
   ``planner.cli.run_cmd`` for ``--out``).
 * All errors flow through ``PlannerError``; never leak a Python
-  traceback to the user (mirrors ``planner.cli.run_cmd``).
-* Stub commands exit ``0`` even though they did no work — the
-  ``implementation_status`` field is the canonical signal.
+  traceback to the user (mirrors ``planner.cli.run_cmd``). The
+  review-run engine additionally guards against legitimate-JSON /
+  wrong-shape artifacts so a non-dict top level degrades to a
+  finding instead of an ``AttributeError`` traceback.
+* The ``review-batch`` stub exits ``0`` even though it does no
+  work - the ``implementation_status`` field is the canonical
+  signal.
 """
 
 from __future__ import annotations
@@ -152,7 +157,7 @@ def _render_markdown(
 @click.group("agent")
 @click.pass_context
 def agent_group(ctx: click.Context) -> None:
-    """Planner product agent (read-only diagnose + Phase 3 P1 stubs).
+    """Planner product agent (read-only diagnose + review-run + stub).
 
     The agent is read-only by default; it never writes files unless
     ``--write-report PATH`` is given explicitly. In production

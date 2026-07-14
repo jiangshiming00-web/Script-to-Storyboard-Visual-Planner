@@ -195,10 +195,19 @@ def test_rv1_missing_location(tmp_path: Path) -> None:
     assert any("场景" in f.message for f in report.findings if f.code == "rv1_image_prompt_bible_ref_mismatch")
 
 
-def test_rv1_phantom_character(tmp_path: Path) -> None:
-    # header names 张楠 but shot does not reference zhang_nan
-    bad = {"image_prompts": [{"shot_id": "shot-001", "prompt": "场景：办公室。人物：林夏。人物：张楠。道具：文件夹。body", "negative_prompt": "neg"}]}
-    run_dir = _make_reviewable_run(tmp_path, image_prompts=bad)
+def test_rv1_character_name_mismatch_is_phantom(tmp_path: Path) -> None:
+    # header 人物段 names 张楠 but shot references 林夏 (lin_xia);
+    # rv1 flags both missing (林夏) and phantom (张楠). Under the
+    # count-based header consumer (direction 2), a header segment
+    # whose name disagrees with the shot's bible ref is the phantom
+    # case; extra same-label segments past the expected count are
+    # body, not phantom.
+    shot = {"shots": [{"id": "shot-001", "scene_id": "scene-1", "location_id": "office",
+        "character_ids": ["lin_xia"], "prop_ids": ["folder"],
+        "shot_size": "medium", "camera_angle": "eye", "composition": "x",
+        "action": "x", "emotion": "x"}]}
+    bad = {"image_prompts": [{"shot_id": "shot-001", "prompt": "场景：办公室。人物：张楠。道具：文件夹。body", "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, shot_list=shot, image_prompts=bad)
     report = review_run_dir(run_dir)
     codes = _codes(report)
     assert "rv1_image_prompt_bible_ref_mismatch" in codes
@@ -358,3 +367,134 @@ def test_expected_env_mismatch_warning(tmp_path: Path) -> None:
     report = review_run_dir(run_dir, expected_env="production")
     assert "env_mismatch" in _codes(report)
     assert report.status == "warnings"
+
+
+# ---------- P1 regression: legitimate JSON, wrong top-level shape ----------
+# Codex Phase 3 P2 review (P1): a non-dict top level (list / str / int)
+# must NOT raise AttributeError through the CLI. The engine emits an
+# artifact_corrupted / corrupted_run_summary finding and skips
+# dependent rules instead.
+
+
+def test_artifact_top_level_list_emits_corrupted_no_crash(tmp_path: Path) -> None:
+    # image_prompts.json is valid JSON but a bare list, not a dict.
+    run_dir = _make_reviewable_run(tmp_path)
+    (run_dir / "image_prompts.json").write_text("[1, 2, 3]", encoding="utf-8")
+    report = review_run_dir(run_dir)
+    codes = _codes(report)
+    assert "artifact_corrupted" in codes
+    # rv1 / rv3 depend on image_prompts being a usable dict; skipped.
+    assert "rv1_image_prompt_bible_ref_mismatch" not in codes
+    assert "rv3_unresolved_placeholder" not in codes
+
+
+def test_artifact_top_level_string_emits_corrupted(tmp_path: Path) -> None:
+    run_dir = _make_reviewable_run(tmp_path, char_bible="not a dict")
+    report = review_run_dir(run_dir)
+    assert "artifact_corrupted" in _codes(report)
+
+
+def test_run_summary_top_level_list_emits_corrupted_no_crash(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_summary.json").write_text("[1, 2, 3]", encoding="utf-8")
+    report = review_run_dir(run_dir)
+    assert report.status == "errors"
+    assert "corrupted_run_summary" in _codes(report)
+    # No AttributeError leaked; run_id / env stay None.
+    assert report.run_id is None
+    assert report.env is None
+
+
+# ---------- P2 regression: body labels not mistaken for header ----------
+# Codex Phase 3 P2 review (P2): the header parser used to scan the
+# whole prompt, so body prose containing 场景：/人物：/道具： was
+# mistaken for header refs and emitted phantom findings. After the
+# fix, only the leading header run is parsed.
+
+
+def test_rv1_body_character_label_not_phantom(tmp_path: Path) -> None:
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。镜头中的人物：路人甲，背景喧嚣",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    assert "rv1_image_prompt_bible_ref_mismatch" not in _codes(report)
+
+
+def test_rv1_body_scene_label_not_phantom(tmp_path: Path) -> None:
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。窗外场景：夜空，月光洒落",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    assert "rv1_image_prompt_bible_ref_mismatch" not in _codes(report)
+
+
+def test_rv1_body_prop_label_not_phantom(tmp_path: Path) -> None:
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。桌上道具：怀表一只",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    assert "rv1_image_prompt_bible_ref_mismatch" not in _codes(report)
+
+
+def test_rv1_codex_repro_body_character_after_full_header(tmp_path: Path) -> None:
+    # Codex Phase 3 P2 round-2 原始复现: 完整 header (场景+人物+道具) 后,
+    # body 第一段以纯 "人物：" 开头 ("人物：背景群众只是画面描述，不是
+    # header 绑定"). The count-based consumer drinks exactly 1 人物
+    # segment (expected), so the 4th segment is body -> no phantom.
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。人物：背景群众只是画面描述，不是 header 绑定",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    assert "rv1_image_prompt_bible_ref_mismatch" not in _codes(report)
+
+
+def test_rv1_codex_repro_body_same_label_prop(tmp_path: Path) -> None:
+    # Same-label variant: body starts with "道具：" after a full
+    # header. n_prop=1 drinks only the first 道具 segment; the second
+    # is body -> no phantom.
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。道具：怀表只是背景点缀，不是 shot 绑定",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    assert "rv1_image_prompt_bible_ref_mismatch" not in _codes(report)
+
+
+def test_rv1_extra_prop_phantom_when_shot_has_no_prop(tmp_path: Path) -> None:
+    # Codex round-3 反例 1: shot has no prop_ids but header writes
+    # 道具：文件夹 (a known bible prop). rv1 must flag the phantom.
+    # Direction E: extra segment name hits prop_names_all -> phantom.
+    shot = {"shots": [{"id": "shot-001", "scene_id": "scene-1", "location_id": "office",
+        "character_ids": ["lin_xia"], "prop_ids": [],
+        "shot_size": "medium", "camera_angle": "eye", "composition": "x",
+        "action": "x", "emotion": "x"}]}
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：林夏。道具：文件夹。body",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, shot_list=shot, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    codes = _codes(report)
+    assert "rv1_image_prompt_bible_ref_mismatch" in codes
+    assert any("文件夹" in f.message and "未引用" in f.message for f in report.findings)
+
+
+def test_rv1_extra_character_phantom_when_shot_has_no_char(tmp_path: Path) -> None:
+    # Codex round-3 反例 2: shot has no character_ids but header writes
+    # 人物：张楠 (a known bible char). rv1 must flag the phantom.
+    shot = {"shots": [{"id": "shot-001", "scene_id": "scene-1", "location_id": "office",
+        "character_ids": [], "prop_ids": ["folder"],
+        "shot_size": "medium", "camera_angle": "eye", "composition": "x",
+        "action": "x", "emotion": "x"}]}
+    prompts = {"image_prompts": [{"shot_id": "shot-001",
+        "prompt": "场景：办公室。人物：张楠。道具：文件夹。body",
+        "negative_prompt": "neg"}]}
+    run_dir = _make_reviewable_run(tmp_path, shot_list=shot, image_prompts=prompts)
+    report = review_run_dir(run_dir)
+    codes = _codes(report)
+    assert "rv1_image_prompt_bible_ref_mismatch" in codes
+    assert any("张楠" in f.message and "未引用" in f.message for f in report.findings)

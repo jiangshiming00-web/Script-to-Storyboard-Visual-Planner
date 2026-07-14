@@ -2,6 +2,137 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - review-run Codex 第四轮复审通过 + 注释补齐)
+
+Codex 第四轮复审 verdict **可以提交**：P1/P2/P3 阻断项全部收口。唯一 P3 非阻断：`review.py:250` 顶部 header 注释仍写 round2 旧语义（extra 段 ignored），与方向 E 实现不一致。本轮顺手改注释。
+
+### 修复
+
+- `planner/agent/review.py:250` 顶部注释：从 round2 "any further segments are body prose and are ignored" 改为方向 E 描述（consumed + extra + bible-name phantom 命中）。
+
+### 验证
+
+- `python3 -m pytest` -- 391 passed, 2 warnings。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过。
+
+三轮 P2 演进收口：round1 连续段 -> round2 expected 数量 -> round3 方向 E（consumed+extra+bible-name）。方向 E 为终态。
+
+## 2026-07-14 (Proma Phase 3 P2 - review-run Codex 第三轮复审修复 P2 方向 E)
+
+### Background
+
+用户（shiming jiang）作为 Codex 手工对手方对第二轮修复做第三轮复审。verdict **仍不建议提交**：P1/P3 收口，但 P2 方向2 过度修复--超过 expected 的 header label 一律归 body，漏掉了真实 phantom（shot 无 prop 但 header 写 `道具：文件夹`，文件夹在 bible 里，应报 phantom 却报 ok）。本轮采用 Codex 建议的方向 E。
+
+### Findings -> Fixes
+
+#### P1 通过 / P3 主残留通过
+
+非 dict 顶层不再泄露 traceback；`__init__.py` 已同步 review-run full + review-batch stub（历史 changelog/handoff 段落旧描述属历史记录，不阻断）。
+
+#### P2（方向 E）：方向2 过度修复漏掉真实 phantom -> 恢复 bidirectional contract
+
+**Bug**: 第二轮 `_consume_header_names` 按 expected 数量消费，超过 expected 的同类 label 全归 body。shot 无 `prop_ids` 但 header 写 `道具：文件夹`（文件夹在 prop_bible）时，status=ok，漏报 phantom。违背 rv1 的 missing + phantom bidirectional contract。
+
+**Fix** (Codex 建议方向 E): `_consume_header_names` -> `_parse_prompt_header` 返回 `(consumed, extra)`。consumed = 前 expected 段（场景->人物->道具 顺序，每 label 独立 while 消费 expected 数量）；extra = 超出 expected 的、仍以 header label 开头的段。`_rule_rv1` 加 extra phantom 检查：extra 段 name 命中对应 bible index 已知 name 且不在 expected -> 报 phantom；不命中 bible name -> body 忽略。
+
+关键洞察：`场景：([^。]*)` 提取的 name，真实 header 是纯 name（命中 bible），body prose 是"name+描述"（不命中 bible）--bible name 命中判定天然区分两者。这样 `人物：背景群众只是画面描述`（背景群众不在 bible）不误报，但 `人物：张楠` / `道具：文件夹`（在 bible）会被抓住。
+
+保留 missing（expected 在 consumed 缺）+ primary phantom（consumed name 与 expected 不符）+ extra phantom（超出 expected 段命中 bible 但不在 expected）三层检查，恢复 bidirectional contract。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 391 pytest（389 + 2 Codex 反例），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- production fail-closed + redact + read-only 全部保留。
+
+### 验证
+
+- `python3 -m pytest` -- 391 passed, 2 warnings。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过。
+- Codex 反例 1（shot 无 prop，header 写 `道具：文件夹`）-> 报 phantom 文件夹。
+- Codex 反例 2（shot 无 char，header 写 `人物：张楠`）-> 报 phantom 张楠。
+- body prose（`人物：背景群众...` / `道具：怀表只是背景...`）仍不误报。
+
+## 2026-07-14 (Proma Phase 3 P2 - review-run Codex 第二轮复审修复 P2/P3)
+
+### Background
+
+用户（shiming jiang）作为 Codex 手工对手方对第一轮修复（P1 traceback / P2 header / P3 docstring）做第二轮复审。verdict **暂不提交**：P1 已通过，但 P2 原始复现样例仍误报，P3 有 `__init__.py` 残留。本轮按 Codex 建议方向2 重写 P2 + 修 P3 残留。
+
+### Findings -> Fixes
+
+#### P1 已通过
+
+合法 JSON 但顶层非 dict 的 artifact / run_summary 不再泄露 traceback（`_read_artifact_safe` + `review_run_dir` 两处 isinstance 守卫）。复现场景验证：artifact 非 dict -> `artifact_corrupted`；run_summary 非 dict -> `corrupted_run_summary`；stderr 无 Traceback / AttributeError。
+
+#### P2（重写）：_extract_header "连续 header 段"策略在 body 段以纯 header label 开头时仍误报
+
+**Bug**: 第一轮的 `_extract_header` 取"开头连续 header 段"，但 body 第一段如果恰好以纯 `人物：` / `场景：` / `道具：` 开头（如 Codex 原始复现 `场景：办公室。人物：林夏。道具：文件夹。人物：背景群众只是画面描述`），会被当作 header 段，触发 phantom 误报。
+
+**Fix** (Codex 建议方向2): 删除 `_extract_header` / `_parse_header_names` / `_HEADER_LABEL_RE`，新增 `_consume_header_names(prompt, n_scene, n_char, n_prop)`。按生成器 emit 顺序（场景 -> 人物 -> 道具）从开头消费恰好 expected 数量的每个 label 段（1 场景 if loc + N 人物 + M 道具），每 label 独立 while 消费，剩余段（含同名 label）归 body。`_rule_rv1` 改为先算 expected 再调 `_consume_header_names`。
+
+**Trade-off**: header 段数 > expected（多段）不再报 phantom（多出的归 body）；phantom 改为"header 段 name 与 expected name 不符"触发。`test_rv1_phantom_character` 改为 name-mismatch 语义（`test_rv1_character_name_mismatch_is_phantom`）。
+
+#### P3（残留）：`planner/agent/__init__.py` 仍写 review-run/review-batch 是两个 stubs
+
+**Bug**: 第一轮清了 `cli.py` / `run_all.py`，但 package 入口 `__init__.py:9-14` 仍写 "two stubs (review-run / review-batch)"。
+
+**Fix**: 更新为反映 review-run（P2 full）+ review-batch（仍 stub）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 389 pytest（387 + 2 Codex 复现样例），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- production fail-closed + redact + read-only 全部保留。
+
+### 验证
+
+- `python3 -m pytest` -- 389 passed, 2 warnings。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过。
+- Codex 原始复现样例（完整 header 后 body 以纯 `人物：` 开头）+ 同 label 变体（`道具：` 后 `道具：`）均不再误报。
+
+## 2026-07-14 (Proma Phase 3 P2 - review-run Codex 复审修复 P1/P2/P3)
+
+### Background
+
+用户（shiming jiang）作为 Codex 手工对手方对 Phase 3 P2 review-run（commit `43811bc`，379 pytest + 7 scenarios）做复审。verdict **暂不建议进入 review-batch**：3 findings。本轮按"P1 阻断先修、P2/P3 跟上"全部修齐，复审通过后再进 review-batch。
+
+### Findings -> Fixes
+
+#### P1（阻断）：review-run 对合法 JSON 但顶层非 dict 的 artifact 泄露 traceback
+
+**Bug**: `image_prompts.json` / `run_summary.json` 是合法 JSON 但顶层是 list / string / int（不是预期 dict）时，`_read_artifact_safe` 与 `read_run_summary` 只防 missing / JSONDecodeError / None，不防"非 dict 顶层"。下游 `.get(...)` 对 list 抛 `AttributeError`，而 CLI 只捕获 `PlannerError` / `OSError` / `KeyError`，traceback 直达 stderr，违反 graceful / no-traceback 红线。
+
+**Fix**:
+- `planner/agent/review.py::_read_artifact_safe` 加 `isinstance(payload, dict)` 守卫：非 dict 顶层 -> `artifact_corrupted` finding + 返回 None + 跳过依赖规则（覆盖 6 个 review artifacts）。
+- `planner/agent/review.py::review_run_dir` step 0 加 `isinstance(summary, dict)` 守卫：非 dict 顶层 -> `corrupted_run_summary` error finding + 最小化报告返回（覆盖 run_summary 路径，`read_run_summary` 只防 `data is None`）。
+
+#### P2：rv1 自称只解析 header 但实际扫描整段 prompt
+
+**Bug**: rv1 docstring 声称只解析 prompt header（`场景：/人物：/道具：`），但 `_parse_header_names` 用 `findall` 扫描整段 prompt。body 正文里出现 `人物：xxx` / `场景：xxx` / `道具：xxx`（如"镜头中的人物：路人甲"）会被误判成 header 引用，触发 phantom 误报。
+
+**Fix**: `planner/agent/review.py` 新增 `_extract_header`（取开头连续的、以 `场景：/人物：/道具：` 开头的 `。` 分隔段，遇到第一个非 header 段即停止）+ `_HEADER_LABEL_RE`；`_parse_header_names` 改为只在该 header 子串上跑正则。body 里的标签不再被解析。
+
+#### P3：cli.py / run_all.py 仍说 review-run 是 stub
+
+**Bug**: review-run 已是 full 实现，但 `planner/agent/cli.py` 顶部 docstring（"two stubs (review-run / review-batch)"）+ `agent_group` docstring（"Phase 3 P1 stubs"）、`harness/agent_scenarios/run_all.py` 顶部 docstring + `validate_live_agent_replay` Coverage matrix + review_* 代码注释仍称 review-run 是 stub / not_implemented，与代码逻辑不一致。
+
+**Fix**: 三处 docstring + 一处代码注释更新为反映 review-run（Phase 3 P2 full）+ review-batch（仍 stub）的当前状态。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 387 pytest（379 + 6 engine + 2 cli），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- production fail-closed + redact + read-only 全部保留；P1 修复强化了 graceful / no-traceback 红线。
+
+### 验证
+
+- `python3 -m pytest` -- 387 passed, 2 warnings（既有 websockets DeprecationWarning，与本次无关）。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过（review_prompt_refs 走 full replay，batch_continuity 走 stub）。
+
 ## 2026-07-14 (Proma Phase 3 P2 - review-run 完整实现)
 
 ### Background
