@@ -1,5 +1,45 @@
 # Handoff
 
+## 当前状态（2026-07-14 - Phase 3 P2 diagnose continuity-audit R14/R15/R16 完工，待 Codex 复审）
+
+按 user-ack 进入 `phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift`，范围限定**单 run 内 bible self-consistency**，落地在 `planner/agent/diagnose.py` 加 3 条独立规则；CLI 不变；不新增 harness scenario；不做 GUI 面板；跨集 drift 仍归 review-batch rb1-rb3。design brief 落 `.context/plan/continuity_audit_r14_r15_r16.md`。
+
+### 实现（`planner/agent/diagnose.py`）
+
+- 共享 helper `_safe_read_bible_for_self_consistency`（graceful 读 bible：missing/corrupted/non-dict → None）
+- 共享 helper `_check_bible_self_consistency`（三类检查 + EvidenceRef locator + `_safe_text` redact）
+- 3 条新规则（全 warning）：
+  - **R14 character_bible_internal_id_conflict** / `character_bible_internal_name_conflict` / `character_bible_missing_visual_field` — critical_visual_fields = `appearance / positive_prompt / negative_prompt`
+  - **R15 location_bible_internal_id_conflict** / `..._name_conflict` / `..._missing_visual_field` — critical_visual_fields = `space_layout / positive_prompt / negative_prompt`
+  - **R16 prop_bible_internal_id_conflict** / `..._name_conflict` / `..._missing_visual_field` — critical_visual_fields = `visual / positive_prompt / negative_prompt`
+- 接入 `diagnose_run_dir` Step 4 末尾，与 R2/R3/R4/R7/R8/R9/R12/R13 同段
+- 模块顶部 docstring 13 → 16 条规则说明，加 R14/R15/R16 段
+- `from .tools import` 加 `KNOWN_ARTIFACTS` + `read_artifact`（helper 用）
+
+### 边界
+
+- 与 R12 partial_run_missing_artifact 解耦（R12 是"有没有"，R14/R15/R16 是"有了之后内部自洽"）
+- 与 review-run rv1 解耦（rv1 是 shot↔header 双向 missing+phantom，R14/R15/R16 是 bible↔bible 内部）
+- 与 review-batch rb1-rb3 解耦（rb1-rb3 是 batch context 跨集，R14/R15/R16 是单集内）
+- 与 review-batch rb4 orphan shot reference 解耦（rb4 是 shot→bible 引用方向，R14/R15/R16 是 bible 内部）
+
+### Tests（`tests/test_agent_diagnose.py` +11 engine 测试）
+
+- 9 个 happy/conflict/missing 样例（每规则 3 case）+ `test_r14_skip_when_character_bible_missing`（mirror R12 grace）+ `test_clean_bibles_no_self_consistency_finding`（happy path）
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- **428 pytest**；agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 40 + cli 19 + review 58 + boundaries 11（合计 167）；其余为 baseline tests；零回归
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留（新规则所有 message + EvidenceRef locator 都走 `_safe_text`）
+- harness 7 scenarios 全过（sample run 用 clean bible，新规则不触发 finding，避免噪音）
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 R14/R15/R16**（重点看三类检查的语义边界 / EvidenceRef locator 格式 / 与 R12 / rv1 / rb1-rb4 的去重是否完整 / harness sample run 不触发冲突 / 三件套对齐）
+- **Phase 3 P2 可选 next**：GUI agent 面板（按"核心先于壳层"原则）；opt-in probe；Phase Core-3 跨集连续性
+
 ## 当前状态（2026-07-14 - Phase 3 P2 review-batch Codex round-2 复审修复 P2 + P3，待 Codex round-3 复审）
 
 Codex 手工对手方对 review-batch 完整实现做 round-2 复审，给出 1 P2（核心 batch membership 语义）+ 2 P3（stale 入口文档 + PROJECT_STATUS 测试拆分过时）。本轮按"P2 必修 + P3 顺手补"全部修齐，等 Codex round-3 复审放行。

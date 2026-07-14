@@ -2,6 +2,67 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - diagnose continuity-audit R14/R15/R16)
+
+按 user-ack 进入 Phase 3 P2 `phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift`。范围：**单 run 内 bible self-consistency**（不依赖 batch context，跨集 drift 仍归 review-batch rb1-rb3），落地在 `planner/agent/diagnose.py` 加 3 条独立规则；CLI 不变；不新增 harness scenario；不做 GUI 面板。
+
+### Added
+
+- **`planner/agent/diagnose.py` 3 条新独立规则 + 共享 helper**：
+  - **`_safe_read_bible_for_self_consistency`** helper — graceful 读 bible（missing/corrupted/non-dict → None；其他规则已报告这些失败模式，本 helper 不重报）。
+  - **`_check_bible_self_consistency`** 共享逻辑 — 三类检查：
+    1. **id 冲突**: 同一 id 在 ≥2 entry 出现但 name 不同（`code: <bible>_internal_id_conflict`）
+    2. **name 冲突**: 同一 name 在 ≥2 entry 出现但 id 不同（`code: <bible>_internal_name_conflict`）
+    3. **缺关键视觉字段**: id/name 缺失 → `<bible>_missing_visual_field`（独立 finding），或全部 critical_visual_fields 为空 → `<bible>_missing_visual_field`（同样 code，独立 finding）
+  - **`R14 character_bible_internal_id_conflict`** (warning): critical_visual_fields = `appearance / positive_prompt / negative_prompt`
+  - **`R15 location_bible_internal_id_conflict`** (warning): critical_visual_fields = `space_layout / positive_prompt / negative_prompt`
+  - **`R16 prop_bible_internal_id_conflict`** (warning): critical_visual_fields = `visual / positive_prompt / negative_prompt`
+- **接入 `diagnose_run_dir` Step 4 末尾**：与 R2/R3/R4/R7/R8/R9/R12/R13 同段，独立调；CLI 不变。
+- **模块顶部 docstring**：13 → 16 条规则说明，新增"R14/R15/R16 (continuity audit, bible self-consistency)"段，明确不依赖 batch context。
+- **`from .tools import` 加 `KNOWN_ARTIFACTS` + `read_artifact`**（helper 用）。
+
+### 边界
+
+- 与 **R12 partial_run_missing_artifact**：解耦；R12 是"有没有 artifact"，R14/R15/R16 是"有了之后内部自洽"。
+- 与 **review-run rv1**：解耦；rv1 是 shot↔header 双向 missing+phantom，R14/R15/R16 是 bible↔bible 内部。
+- 与 **review-batch rb1-rb3 跨集 drift**：解耦；rb1-rb3 是 batch context 跨集，R14/R15/R16 是单集内。
+- 与 **review-batch rb4 orphan shot reference**：解耦；rb4 是 shot→bible 引用方向，R14/R15/R16 是 bible 内部。
+- **不重做**: 跨集 id 一致性（review-batch rb1-rb3 已覆盖）；name→id 反向漂移（review-batch 已 deferred 为 open question）。
+
+### Tests（`tests/test_agent_diagnose.py` +11 engine 测试）
+
+- 9 个 happy/conflict/missing 样例（每规则 3 case）：
+  - `test_r14_character_id_conflict` / `test_r14_character_name_conflict` / `test_r14_character_missing_visual_field`
+  - `test_r15_location_id_conflict` / `test_r15_location_name_conflict` / `test_r15_location_missing_visual_field`
+  - `test_r16_prop_id_conflict` / `test_r16_prop_name_conflict` / `test_r16_prop_missing_visual_field`
+- `test_r14_skip_when_character_bible_missing` — mirror R12 grace pattern（无 bible → R14/R15/R16 全部 skip，无 false-positive finding）
+- `test_clean_bibles_no_self_consistency_finding` — 全规则 happy path
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 428 pytest（417 + 11 新增 engine），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留：
+  - 每条新 finding 的 message 和 EvidenceRef locator 都走 `_safe_text`（review 子会话 round-1 已强化的 redact 链）
+  - bible 不存在 / 损坏 / 顶层非 dict → skip rule（不重报 R12 / validate_run 已发的 artifact_unreadable / artifact_corrupted）
+  - harness 不破：现有 `diagnose_*` scenarios 自动走过新规则，sample run 用 clean bible，新规则无 finding 触发
+
+### 验证
+
+- `python3 -m pytest` -- **428 passed, 2 warnings**；agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 40 + cli 19 + review 58 + boundaries 11（合计 167，比 round-2 收口的 417 多了 11 个 R14/R15/R16 测试）；其余为 baseline tests
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过
+- `python3 -m json.tool PROJECT_STATUS.json` -- 通过
+- `git diff --check` -- 通过
+- `runs/` -- 仅含 `.gitkeep`
+
+### 不做（用户拍板）
+
+- 不实现 GUI 面板（用户明确"先做设计/范围确认，不要直接开 GUI 面板"——本轮限定 backend agent 规则）
+- 不重做跨集 drift（review-batch rb1-rb3 已覆盖）
+- 不做 name → id 反向漂移（review-batch 已 deferred 为 open question，本轮不重复引入）
+- 不新增 harness scenario（engine test 已足够覆盖；sample run 不触发冲突避免噪音）
+
 ## 2026-07-14 (Proma Phase 3 P2 - review-batch Codex 手工 round-2 复审修复 P2 + P3)
 
 Codex 手工对手方对 review-batch 完整实现（commit 含 `phase3_p2_review_batch_codex_review_subsession_fixes_applied`）做 round-2 复审。verdict **暂不建议进入下一步**：实现主方向对，但有 1 个核心 P2 需要先修；另有几个 P3 stale 文档/状态项。本轮按"P2 必修 + P3 顺手补"全部修齐，等 Codex round-3 复审放行。

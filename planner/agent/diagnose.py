@@ -2,7 +2,11 @@
 
 Phase 3 P1: 13 diagnostic rules produce a :class:`DiagnoseReport`
 without mutating any file, calling any LLM, or executing any
-shell command. The rules are split into:
+shell command. Phase 3 P2 continuity-audit adds 3 more (R14/R15/R16)
+for single-run bible self-consistency (does NOT depend on batch
+context; cross-episode drift remains review-batch's job).
+
+Rules split into:
 
 * **R10/R11** (missing/corrupted run_summary): handled at the
   engine entry; subsequent rules depend on a readable summary.
@@ -15,6 +19,10 @@ shell command. The rules are split into:
   rule-based, no LLM, deterministic.
 * **R12/R13** (partial-run / counts mismatch): artifact-level
   inventory and shape checks.
+* **R14/R15/R16** (continuity audit, bible self-consistency):
+  within a single run, check character/location/prop bibles for
+  internal id conflicts (same id, different name), name conflicts
+  (same name, different id), and missing critical visual fields.
 
 The engine is **graceful degradation**: every error path returns
 a partial report rather than raising. The CLI layer is responsible
@@ -35,6 +43,7 @@ Hard rules:
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +55,12 @@ from planner.exceptions import ScriptReadError
 from planner.validate import validate_run as _validate_run
 
 from .redact import redact_secrets_text
-from .tools import list_artifacts as _tools_list_artifacts, read_run_summary
+from .tools import (
+    KNOWN_ARTIFACTS,
+    list_artifacts as _tools_list_artifacts,
+    read_artifact,
+    read_run_summary,
+)
 
 # ---------- Pydantic models ----------
 
@@ -580,6 +594,302 @@ def _rule_r13_counts_mismatch(
 # ---------- Entry point ----------
 
 
+# ---------- R14/R15/R16: bible self-consistency (Phase 3 P2 continuity-audit) ----------
+
+
+def _safe_read_bible_for_self_consistency(
+    run_dir: Path,
+    bible_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Read a bible JSON safely for self-consistency checks.
+
+    Returns the parsed top-level dict if the artifact exists and is
+    a JSON object; ``None`` otherwise (missing / corrupted /
+    non-dict top level). Callers skip the self-consistency check on
+    ``None`` because the failure mode is already covered by other
+    rules (R12 partial_run_missing_artifact / artifact_unreadable /
+    artifact_corrupted — these flow through validate_run and the
+    read_artifact safety contract).
+    """
+    artifact_path = run_dir / f"{bible_name}.json"
+    if bible_name not in {a.removesuffix(".json") for a in KNOWN_ARTIFACTS}:
+        # Defense in depth: KNOWN_ARTIFACTS whitelist is the source
+        # of truth. Any bible not in the whitelist cannot be
+        # resolved by read_artifact anyway; we just no-op here.
+        return None
+    if not artifact_path.is_file():
+        return None
+    try:
+        payload = read_artifact(run_dir, f"{bible_name}.json")
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _check_bible_self_consistency(
+    run_dir: Path,
+    bible_name: str,
+    entries: List[Any],
+    list_key: str,
+    critical_visual_fields: tuple,
+    id_conflict_code: str,
+    name_conflict_code: str,
+    missing_field_code: str,
+    findings: List[DiagnoseFinding],
+) -> None:
+    """Shared self-consistency logic for character/location/prop bibles.
+
+    Detects three failure modes:
+
+    1. **id conflict** (``id_conflict_code``): same ``id`` appears in
+       ≥2 entries with different ``name``. A single character id
+       pointing to two names is a bible authoring mistake (or
+       mid-run drift); downstream shots referencing the id would
+       be ambiguous.
+    2. **name conflict** (``name_conflict_code``): same ``name``
+       appears in ≥2 entries with different ``id``. The Chinese
+       display name is supposed to be a unique key after the
+       planner's name→id normalization; duplicates mean either
+       the normalization step skipped them or two distinct ids
+       got the same Chinese name by mistake.
+    3. **missing critical visual field** (``missing_field_code``):
+       any entry whose ``id`` / ``name`` is missing OR whose
+       critical visual fields are all empty. These entries cannot
+       meaningfully seed image/video prompts downstream.
+
+    All findings are warnings (quality hints, not blocking).
+
+    Evidence locator uses JSONPath-like syntax pointing at the
+    list key. The aggregate evidence is anchored on the bible
+    itself; per-entry indexes are listed in the message (not the
+    locator) so the diagnostic surface stays 1 finding == 1
+    actionable issue.
+
+    Read-only + graceful: returns early if ``entries`` is not a
+    list. Redact: every string field flows through ``_safe_text``
+    before reaching the finding message.
+    """
+    if not isinstance(entries, list):
+        return
+
+    # ----- 1. id conflict -----
+    id_index: Dict[str, List[int]] = {}
+    name_index: Dict[str, List[int]] = {}
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            # Skip non-dict entries; this is a separate shape
+            # concern covered by review-run / R12 partial artifacts.
+            continue
+        eid = entry.get("id")
+        ename = entry.get("name")
+        if isinstance(eid, str) and eid:
+            id_index.setdefault(eid, []).append(idx)
+        if isinstance(ename, str) and ename:
+            name_index.setdefault(ename, []).append(idx)
+
+    for cid, indexes in id_index.items():
+        names = [
+            entries[i].get("name")
+            for i in indexes
+            if isinstance(entries[i], dict)
+        ]
+        distinct_names = {n for n in names if n is not None}
+        if len(distinct_names) > 1:
+            findings.append(
+                DiagnoseFinding(
+                    severity="warning",
+                    code=id_conflict_code,
+                    message=(
+                        f"{bible_name}.json 内部 id 冲突：id {cid!r} 在 entries[{indexes}]"
+                        f" 对应多个 name（{sorted(_safe_text(str(n)) for n in distinct_names)}）；"
+                        "同一 id 应只对应一个 name，请人工合并或修正。"
+                    ),
+                    evidence=[
+                        EvidenceRef(
+                            artifact=f"{bible_name}.json",
+                            path=str(run_dir / f"{bible_name}.json"),
+                            locator=f"$.{list_key}[?(@.id=={cid!r})]",
+                        )
+                    ],
+                )
+            )
+
+    # ----- 2. name conflict -----
+    for cname, indexes in name_index.items():
+        ids = [
+            entries[i].get("id")
+            for i in indexes
+            if isinstance(entries[i], dict)
+        ]
+        distinct_ids = {i for i in ids if i is not None}
+        if len(distinct_ids) > 1:
+            findings.append(
+                DiagnoseFinding(
+                    severity="warning",
+                    code=name_conflict_code,
+                    message=(
+                        f"{bible_name}.json 内部 name 冲突：name {cname!r} 在 entries[{indexes}]"
+                        f" 对应多个 id（{sorted(_safe_text(str(i)) for i in distinct_ids)}）；"
+                        "同一中文 name 应只对应一个 id，请人工合并或修正。"
+                    ),
+                    evidence=[
+                        EvidenceRef(
+                            artifact=f"{bible_name}.json",
+                            path=str(run_dir / f"{bible_name}.json"),
+                            locator=f"$.{list_key}[?(@.name=={cname!r})]",
+                        )
+                    ],
+                )
+            )
+
+    # ----- 3. missing critical visual field -----
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        eid = entry.get("id")
+        ename = entry.get("name")
+        # Required keys: id + name + at least one critical visual field
+        # non-empty. Missing id/name is a stronger signal — surface as
+        # its own finding ("关键标识字段缺失").
+        missing_required: List[str] = []
+        if not isinstance(eid, str) or not eid:
+            missing_required.append("id")
+        if not isinstance(ename, str) or not ename:
+            missing_required.append("name")
+        if missing_required:
+            findings.append(
+                DiagnoseFinding(
+                    severity="warning",
+                    code=missing_field_code,
+                    message=(
+                        f"{bible_name}.json entries[{idx}] 缺少关键标识字段："
+                        f"{missing_required}（缺其一则该 entry 无法被 shot / prompt 引用）。"
+                    ),
+                    evidence=[
+                        EvidenceRef(
+                            artifact=f"{bible_name}.json",
+                            path=str(run_dir / f"{bible_name}.json"),
+                            locator=f"$.{list_key}[{idx}]",
+                        )
+                    ],
+                )
+            )
+            continue  # don't also flag missing visual fields on the same entry
+        # Critical visual fields: all-empty is the failure mode. If at
+        # least one is non-empty, the entry has SOME visual info and we
+        # don't flag it (consistent with review-run rv3 placeholder /
+        # review-batch rb4 not flagging partially-populated entries).
+        all_empty = True
+        for f in critical_visual_fields:
+            val = entry.get(f)
+            if isinstance(val, str) and val.strip():
+                all_empty = False
+                break
+        if all_empty:
+            field_names = "/".join(critical_visual_fields)
+            findings.append(
+                DiagnoseFinding(
+                    severity="warning",
+                    code=missing_field_code,
+                    message=(
+                        f"{bible_name}.json entries[{idx}]（id={eid!r}）"
+                        f"关键视觉字段全部为空（{field_names}）；"
+                        "下游 prompt 将退化为空字符串，建议补全。"
+                    ),
+                    evidence=[
+                        EvidenceRef(
+                            artifact=f"{bible_name}.json",
+                            path=str(run_dir / f"{bible_name}.json"),
+                            locator=f"$.{list_key}[{idx}]",
+                        )
+                    ],
+                )
+            )
+
+
+def _rule_r14_character_bible_internal_id_conflict(
+    run_dir: Path,
+    findings: List[DiagnoseFinding],
+) -> None:
+    """R14: character_bible.characters[] internal self-consistency.
+
+    Detects id conflict, name conflict, and missing critical visual
+    field (``appearance`` / ``positive_prompt`` / ``negative_prompt``).
+    Skipped when the bible is missing / corrupted (covered by R12
+    and the read_artifact safety contract). See
+    :func:`_check_bible_self_consistency` for the shared logic.
+    """
+    payload = _safe_read_bible_for_self_consistency(run_dir, "character_bible")
+    if payload is None:
+        return
+    _check_bible_self_consistency(
+        run_dir=run_dir,
+        bible_name="character_bible",
+        entries=payload.get("characters") or [],
+        list_key="characters",
+        critical_visual_fields=("appearance", "positive_prompt", "negative_prompt"),
+        id_conflict_code="character_bible_internal_id_conflict",
+        name_conflict_code="character_bible_internal_name_conflict",
+        missing_field_code="character_bible_missing_visual_field",
+        findings=findings,
+    )
+
+
+def _rule_r15_location_bible_internal_id_conflict(
+    run_dir: Path,
+    findings: List[DiagnoseFinding],
+) -> None:
+    """R15: location_bible.locations[] internal self-consistency.
+
+    Detects id conflict, name conflict, and missing critical visual
+    field (``space_layout`` / ``positive_prompt`` / ``negative_prompt``).
+    """
+    payload = _safe_read_bible_for_self_consistency(run_dir, "location_bible")
+    if payload is None:
+        return
+    _check_bible_self_consistency(
+        run_dir=run_dir,
+        bible_name="location_bible",
+        entries=payload.get("locations") or [],
+        list_key="locations",
+        critical_visual_fields=("space_layout", "positive_prompt", "negative_prompt"),
+        id_conflict_code="location_bible_internal_id_conflict",
+        name_conflict_code="location_bible_internal_name_conflict",
+        missing_field_code="location_bible_missing_visual_field",
+        findings=findings,
+    )
+
+
+def _rule_r16_prop_bible_internal_id_conflict(
+    run_dir: Path,
+    findings: List[DiagnoseFinding],
+) -> None:
+    """R16: prop_bible.props[] internal self-consistency.
+
+    Detects id conflict, name conflict, and missing critical visual
+    field (``visual`` / ``positive_prompt`` / ``negative_prompt``).
+    """
+    payload = _safe_read_bible_for_self_consistency(run_dir, "prop_bible")
+    if payload is None:
+        return
+    _check_bible_self_consistency(
+        run_dir=run_dir,
+        bible_name="prop_bible",
+        entries=payload.get("props") or [],
+        list_key="props",
+        critical_visual_fields=("visual", "positive_prompt", "negative_prompt"),
+        id_conflict_code="prop_bible_internal_id_conflict",
+        name_conflict_code="prop_bible_internal_name_conflict",
+        missing_field_code="prop_bible_missing_visual_field",
+        findings=findings,
+    )
+
+
+# ---------- Entry point ----------
+
+
 def diagnose_run_dir(
     run_dir: Path,
     *,
@@ -762,6 +1072,12 @@ def diagnose_run_dir(
     _rule_r9_real_calls_disabled_but_not_deterministic(summary, report.findings, run_dir)
     _rule_r12_partial_run_missing_artifact(summary, run_dir, report.findings)
     _rule_r13_counts_mismatch(summary, report.findings, run_dir)
+    # Phase 3 P2 continuity-audit: bible self-consistency (single-run,
+    # does NOT depend on batch context; cross-episode drift remains
+    # review-batch rb1-rb3's job).
+    _rule_r14_character_bible_internal_id_conflict(run_dir, report.findings)
+    _rule_r15_location_bible_internal_id_conflict(run_dir, report.findings)
+    _rule_r16_prop_bible_internal_id_conflict(run_dir, report.findings)
 
     # ----- Step 5: delegate to validate_run (R1/R5/R6 + cross-ref) -----
     try:

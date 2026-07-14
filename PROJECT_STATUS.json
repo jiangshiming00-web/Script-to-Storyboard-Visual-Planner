@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-14",
-  "phase": "v10_phase3_p2_review_batch_codex_round2_batch_membership_fixed",
-  "status": "v10_phase3_p2_review_batch_codex_round2_p2_p3_fixed_awaiting_codex_manual_round2_re_review",
+  "phase": "v10_phase3_p2_diagnose_continuity_audit_r14_r15_r16_landed",
+  "status": "v10_phase3_p2_diagnose_continuity_audit_landed_awaiting_codex_manual_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -148,7 +148,8 @@
     "phase3_p2_review_run_codex_round4_approved_comment_fix",
     "phase3_p2_review_batch_landed_4_rules_rb1_rb4_full_implementation",
     "phase3_p2_review_batch_codex_review_subsession_fixes_applied",
-    "phase3_p2_review_batch_codex_round2_batch_membership_fixed"
+    "phase3_p2_review_batch_codex_round2_batch_membership_fixed",
+    "phase3_p2_diagnose_continuity_audit_r14_r15_r16_landed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -229,7 +230,6 @@
   ],
   "next_actions": [
     "phase3_p2_review_batch_codex_manual_round2_re_review_pending",
-    "phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
@@ -292,13 +292,16 @@
         "R10 missing_run_summary (error, entry-level)",
         "R11 corrupted_run_summary (error, graceful)",
         "R12 partial_run_missing_artifact (warning, lists missing, does NOT recreate)",
-        "R13 image_prompts_count_mismatch + video_prompts_count_mismatch (warning)"
+        "R13 image_prompts_count_mismatch + video_prompts_count_mismatch (warning)",
+        "R14 character_bible internal self-consistency: internal_id_conflict + internal_name_conflict + missing_visual_field (warning, single-run)",
+        "R15 location_bible internal self-consistency: internal_id_conflict + internal_name_conflict + missing_visual_field (warning, single-run)",
+        "R16 prop_bible internal self-consistency: internal_id_conflict + internal_name_conflict + missing_visual_field (warning, single-run)"
       ],
       "tests": [
         "tests/test_agent_redact.py (17 tests for 4 regex (Bearer/sk-/sk-ant-/gho_) + ordering + false-positive guards + mixed secrets)",
         "tests/test_agent_readers.py (13 tests for graceful loads + size cap)",
         "tests/test_agent_tools.py (9 tests for registry alignment + delegation + TOOL_ARTIFACT_MAP sync)",
-        "tests/test_agent_diagnose.py (29 tests for 13 rules + status derivation + stub + 5 redact exit surfaces + substring routing)",
+        "tests/test_agent_diagnose.py (40 tests for 16 rules incl R14/R15/R16 bible self-consistency 9 happy/conflict/missing + skip-when-bible-missing + clean-bibles-no-finding + status derivation + stub + 5 redact exit surfaces + substring routing)",
         "tests/test_agent_cli.py (19 subprocess tests: diagnose 5 + review-run 9 + review-batch 3 + 2 Codex P1 traceback-guard regression)",
         "tests/test_agent_review.py (58 tests for 4 rv1-rv4 rules + 4 rb1-rb4 batch rules + graceful + status + tool_invocations + redact + single-episode skip + empty batch + Codex regression incl 3 new Codex round-2 batch membership regressions: stale subdir / failed-status / missing-run_dir)"
       ],
@@ -571,6 +574,10 @@
     "v10_phase3_p2_review_batch_review_subsession": "NEEDS_FIX -> fixed: P2-1 rb4 false-positive when bible missing (isinstance guard per ref class) + P2-2 evidence locator redact (_add_finding redacts artifact/path/locator, review-run shares) + P3-1 stale docstring (run_all.py validate_live_agent_replay) + P3-2 _render_markdown batch_dir/batch_id fallback + P3-3 review-batch --write-report policy + markdown tests. P3-2 harness strength + P3-4 name->id drift deferred as open questions.",
     "v10_phase3_p2_review_batch_codex_round2": "NEEDS_FIX -> fixed: P2 batch membership was directory-scan-based -> stale subdir (e.g. OLD_EP99) wrongly included in rb1-rb4; failed/missing-run_dir episodes silently dropped; counts lied about episodes_reviewed. Fix: review_batch_dir now reads batch_summary.episodes[] as authoritative; only status=done + run_dir exists enters review; status!=done / missing run_dir / malformed meta -> batch_episode_not_reviewable warning + episodes_skipped increment; counts distinguish episodes_total / episodes_reviewed / episodes_skipped (episodes kept as back-compat alias). list_runs_in_batch removed from review path. P3 stale __init__.py / agent_group docstring (review-batch remains a stub -> both full). P3 PROJECT_STATUS test splits refreshed (test_agent_cli.py 17->19, test_agent_review.py 53->58).",
     "v10_phase3_p2_review_batch_codex_round2_pytest": "417 passed; agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 29 + cli 19 + review 58 + boundaries 11 (subtotal 156); remaining is baseline tests; 0 regression",
-    "v10_phase3_p2_review_batch_codex_round2_scenarios": "pass (7 scenarios; batch_continuity full replay unchanged — list_runs_in_batch is a declared expected tool but harness cross-check only verifies artifact existence, not call frequency; tool_invocations still non-empty via read_batch_summary + 4 read_artifact per episode)"
+    "v10_phase3_p2_review_batch_codex_round2_scenarios": "pass (7 scenarios; batch_continuity full replay unchanged — list_runs_in_batch is a declared expected tool but harness cross-check only verifies artifact existence, not call frequency; tool_invocations still non-empty via read_batch_summary + 4 read_artifact per episode)",
+    "v10_phase3_p2_continuity_audit_brief": "pass (user-ack 2026-07-14 ack into implementation; design brief at .context/plan/continuity_audit_r14_r15_r16.md; scope locked to single-run bible self-consistency; cross-episode drift remains review-batch rb1-rb3's job; no GUI panel; no new harness scenario; no new CLI subcommand)",
+    "v10_phase3_p2_continuity_audit": "pass (diagnose.py R14 character_bible + R15 location_bible + R16 prop_bible internal self-consistency; each rule emits id-conflict / name-conflict / missing-visual-field warning; shared _check_bible_self_consistency helper + _safe_read_bible_for_self_consistency graceful reader; EvidenceRef JSONPath locator + _safe_text redact; skipped when bible missing/corrupted (covered by R12 / validate_run); CLI unchanged; scope disjoint from rv1 / rb1-rb4)",
+    "v10_phase3_p2_continuity_audit_pytest": "428 passed; agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 40 + cli 19 + review 58 + boundaries 11 (subtotal 167); remaining is baseline tests; 0 regression (delta vs round-2 417 = +11 new engine tests: 9 happy/conflict/missing per rule + 1 skip-when-bible-missing + 1 clean-bibles-no-finding)",
+    "v10_phase3_p2_continuity_audit_scenarios": "pass (7 scenarios unchanged; sample dev run uses clean bible so R14/R15/R16 do not fire finding; cross-check + live agent replay both green; no new scenario added per design brief decision)"
   }
 }

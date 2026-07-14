@@ -726,6 +726,341 @@ def test_translate_validate_report_substring_routing() -> None:
     assert findings2[0].severity == "error"
 
 
+# ---------- R14/R15/R16: bible self-consistency (Phase 3 P2 continuity-audit) ----------
+
+
+def _write_clean_bibles(run_dir: Path) -> None:
+    """Write minimally valid bibles: each entry has a unique id +
+    unique Chinese name + non-empty critical visual field.
+
+    Used as the baseline so tests only mutate the field they care
+    about (id / name / visual field). Mirrors the shape the real
+    pipeline emits.
+    """
+    (run_dir / "character_bible.json").write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {"id": "lin_xia", "name": "林夏",
+                     "appearance": "短发女性", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "zhang_nan", "name": "张楠",
+                     "appearance": "长裙女性", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "location_bible.json").write_text(
+        json.dumps(
+            {
+                "locations": [
+                    {"id": "office", "name": "办公室",
+                     "space_layout": "开放工位", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps(
+            {
+                "props": [
+                    {"id": "folder", "name": "文件夹",
+                     "visual": "蓝色塑料皮", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _codes(report: DiagnoseReport) -> list:
+    return [f.code for f in report.findings]
+
+
+# ----- R14 character bible -----
+def test_r14_character_id_conflict(tmp_path: Path) -> None:
+    """R14: same character id with different names -> warning."""
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "character_bible.json").write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {"id": "lin_xia", "name": "林夏",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "lin_xia", "name": "林夏_别名",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_locations_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "character_bible_internal_id_conflict" in codes
+    f = next(x for x in report.findings if x.code == "character_bible_internal_id_conflict")
+    assert f.severity == "warning"
+    assert "lin_xia" in f.message and "林夏" in f.message and "林夏_别名" in f.message
+
+
+def test_r14_character_name_conflict(tmp_path: Path) -> None:
+    """R14: same character name with different ids -> warning."""
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "character_bible.json").write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {"id": "lin_xia", "name": "林夏",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "lin_xia_alt", "name": "林夏",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_locations_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "character_bible_internal_name_conflict" in codes
+    f = next(x for x in report.findings if x.code == "character_bible_internal_name_conflict")
+    assert f.severity == "warning"
+    assert "林夏" in f.message and "lin_xia" in f.message and "lin_xia_alt" in f.message
+
+
+def test_r14_character_missing_visual_field(tmp_path: Path) -> None:
+    """R14: character entry with all critical visual fields empty -> warning."""
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "character_bible.json").write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {"id": "lin_xia", "name": "林夏",
+                     "appearance": "", "positive_prompt": "", "negative_prompt": ""},
+                    {"id": "zhang_nan", "name": "张楠",
+                     "appearance": "长裙", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_locations_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "character_bible_missing_visual_field" in codes
+    f = next(x for x in report.findings if x.code == "character_bible_missing_visual_field")
+    assert f.severity == "warning"
+    assert "lin_xia" in f.message
+    assert "appearance" in f.message
+
+
+def test_r14_skip_when_character_bible_missing(tmp_path: Path) -> None:
+    """R14: no character_bible.json -> rule skipped, no R14 finding
+    (mirror R12 partial_run_missing_artifact grace pattern)."""
+    run_dir = _make_minimal_run(tmp_path)
+    # No bibles at all. R12 will fire (partial_run_missing_artifact);
+    # R14/R15/R16 must NOT fire because the bibles are absent.
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert not any(c.startswith("character_bible_") for c in codes)
+    assert not any(c.startswith("location_bible_") for c in codes)
+    assert not any(c.startswith("prop_bible_") for c in codes)
+
+
+# ----- R15 location bible -----
+def test_r15_location_id_conflict(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "location_bible.json").write_text(
+        json.dumps(
+            {
+                "locations": [
+                    {"id": "office", "name": "办公室",
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "office", "name": "公司",
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "location_bible_internal_id_conflict" in codes
+    f = next(x for x in report.findings if x.code == "location_bible_internal_id_conflict")
+    assert f.severity == "warning"
+    assert "office" in f.message and "办公室" in f.message and "公司" in f.message
+
+
+def test_r15_location_name_conflict(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "location_bible.json").write_text(
+        json.dumps(
+            {
+                "locations": [
+                    {"id": "office", "name": "办公室",
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "office_alt", "name": "办公室",
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "location_bible_internal_name_conflict" in codes
+
+
+def test_r15_location_missing_visual_field(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "location_bible.json").write_text(
+        json.dumps(
+            {
+                "locations": [
+                    {"id": "office", "name": "办公室",
+                     "space_layout": "", "positive_prompt": "", "negative_prompt": ""},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "location_bible_missing_visual_field" in codes
+    f = next(x for x in report.findings if x.code == "location_bible_missing_visual_field")
+    assert "space_layout" in f.message
+
+
+# ----- R16 prop bible -----
+def test_r16_prop_id_conflict(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps(
+            {
+                "props": [
+                    {"id": "folder", "name": "文件夹",
+                     "visual": "蓝色", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "folder", "name": "档案夹",
+                     "visual": "蓝色", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_locs(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "prop_bible_internal_id_conflict" in codes
+
+
+def test_r16_prop_name_conflict(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps(
+            {
+                "props": [
+                    {"id": "folder", "name": "文件夹",
+                     "visual": "蓝色", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "folder_alt", "name": "文件夹",
+                     "visual": "蓝色", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_locs(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "prop_bible_internal_name_conflict" in codes
+
+
+def test_r16_prop_missing_visual_field(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps(
+            {
+                "props": [
+                    {"id": "folder", "name": "文件夹",
+                     "visual": "", "positive_prompt": "", "negative_prompt": ""},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_locs(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert "prop_bible_missing_visual_field" in codes
+    f = next(x for x in report.findings if x.code == "prop_bible_missing_visual_field")
+    assert "visual" in f.message
+
+
+# ----- Happy path: all clean bibles -> no R14/R15/R16 finding -----
+def test_clean_bibles_no_self_consistency_finding(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    _write_clean_bibles(run_dir)
+    report = diagnose_run_dir(run_dir)
+    codes = _codes(report)
+    assert not any(c.startswith(("character_bible_", "location_bible_", "prop_bible_")) for c in codes)
+
+
+# ----- Helpers used by R14/R15/R16 tests -----
+def _write_clean_bibles_for_locations_and_props(run_dir: Path) -> None:
+    """Write only location_bible + prop_bible (clean)."""
+    (run_dir / "location_bible.json").write_text(
+        json.dumps({"locations": [{"id": "office", "name": "办公室",
+            "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps({"props": [{"id": "folder", "name": "文件夹",
+            "visual": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _write_clean_bibles_for_chars_and_props(run_dir: Path) -> None:
+    (run_dir / "character_bible.json").write_text(
+        json.dumps({"characters": [{"id": "lin_xia", "name": "林夏",
+            "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps({"props": [{"id": "folder", "name": "文件夹",
+            "visual": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _write_clean_bibles_for_chars_and_locs(run_dir: Path) -> None:
+    (run_dir / "character_bible.json").write_text(
+        json.dumps({"characters": [{"id": "lin_xia", "name": "林夏",
+            "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "location_bible.json").write_text(
+        json.dumps({"locations": [{"id": "office", "name": "办公室",
+            "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def _copy_real_pipeline_artifacts(run_dir: Path, scripts_dir: Path, tmp_path: Path) -> None:
     """Run the real planner in dev mode to produce a valid run dir,
     then copy its script_parse.json + bibles + shot_list + image/video
