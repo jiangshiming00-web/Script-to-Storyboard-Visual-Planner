@@ -121,17 +121,28 @@ def _add_finding(
     message: str,
     evidence: List[EvidenceRef],
 ) -> None:
-    """Append a finding with message run through ``_safe_text``.
+    """Append a finding with message + evidence redacted via ``_safe_text``.
 
     Centralizes the redact-on-exit contract so no rule can forget to
-    redact prompt / bible text that may embed a leaked token.
+    redact prompt / bible text that may embed a leaked token. Both the
+    finding ``message`` and each EvidenceRef's ``artifact`` / ``path``
+    / ``locator`` run through ``_safe_text`` (defense in depth - a
+    leaked token embedded in an id that flows into a locator must not
+    reach the report JSON).
     """
     findings.append(
         DiagnoseFinding(
             severity=severity,
             code=code,
             message=_safe_text(message),
-            evidence=evidence,
+            evidence=[
+                EvidenceRef(
+                    artifact=_safe_text(e.artifact),
+                    path=_safe_text(e.path),
+                    locator=_safe_text(e.locator),
+                )
+                for e in evidence
+            ],
         )
     )
 
@@ -878,6 +889,12 @@ def _rule_rb4_orphan_shot_reference(
     Checks ``location_id`` / ``character_ids[]`` / ``prop_ids[]`` of
     each shot against the episode's own bibles. An orphan reference
     (shot names a bible id absent from this episode) is a warning.
+
+    A ref class is only checked when its bible is a readable dict; a
+    missing / corrupted bible is already reported by
+    :func:`_read_artifact_safe` as ``artifact_unreadable``, and
+    checking against an empty id set would false-positive every ref
+    as orphan.
     """
     shot_list = arts.get("shot_list")
     if not isinstance(shot_list, dict):
@@ -885,25 +902,25 @@ def _rule_rb4_orphan_shot_reference(
     char_bible = arts.get("character_bible")
     loc_bible = arts.get("location_bible")
     prop_bible = arts.get("prop_bible")
-    char_ids = {
-        c.get("id") for c in ((char_bible or {}).get("characters") or [])
-        if isinstance(c, dict)
-    }
-    loc_ids = {
-        loc.get("id") for loc in ((loc_bible or {}).get("locations") or [])
-        if isinstance(loc, dict)
-    }
-    prop_ids = {
-        p.get("id") for p in ((prop_bible or {}).get("props") or [])
-        if isinstance(p, dict)
-    }
+    char_ids = (
+        {c.get("id") for c in (char_bible.get("characters") or []) if isinstance(c, dict)}
+        if isinstance(char_bible, dict) else None
+    )
+    loc_ids = (
+        {loc.get("id") for loc in (loc_bible.get("locations") or []) if isinstance(loc, dict)}
+        if isinstance(loc_bible, dict) else None
+    )
+    prop_ids = (
+        {p.get("id") for p in (prop_bible.get("props") or []) if isinstance(p, dict)}
+        if isinstance(prop_bible, dict) else None
+    )
     for s in (shot_list.get("shots") or []):
         if not isinstance(s, dict):
             continue
         sid = s.get("id")
         ev = [EvidenceRef(artifact="shot_list.json", path=str(run_dir / "shot_list.json"), locator=f"$.shots[?(@.id=='{sid}')]")]
         loc_id = s.get("location_id")
-        if loc_id is not None and loc_id not in loc_ids:
+        if loc_ids is not None and loc_id is not None and loc_id not in loc_ids:
             _add_finding(
                 findings,
                 "warning",
@@ -911,24 +928,26 @@ def _rule_rb4_orphan_shot_reference(
                 f"shot {sid}（集 {ep_id}）的 location_id {loc_id!r} 在本集 location_bible 中不存在。",
                 ev,
             )
-        for cid in (s.get("character_ids") or []):
-            if cid not in char_ids:
-                _add_finding(
-                    findings,
-                    "warning",
-                    "rb4_orphan_shot_reference",
-                    f"shot {sid}（集 {ep_id}）的 character_id {cid!r} 在本集 character_bible 中不存在。",
-                    ev,
-                )
-        for pid in (s.get("prop_ids") or []):
-            if pid not in prop_ids:
-                _add_finding(
-                    findings,
-                    "warning",
-                    "rb4_orphan_shot_reference",
-                    f"shot {sid}（集 {ep_id}）的 prop_id {pid!r} 在本集 prop_bible 中不存在。",
-                    ev,
-                )
+        if char_ids is not None:
+            for cid in (s.get("character_ids") or []):
+                if cid not in char_ids:
+                    _add_finding(
+                        findings,
+                        "warning",
+                        "rb4_orphan_shot_reference",
+                        f"shot {sid}（集 {ep_id}）的 character_id {cid!r} 在本集 character_bible 中不存在。",
+                        ev,
+                    )
+        if prop_ids is not None:
+            for pid in (s.get("prop_ids") or []):
+                if pid not in prop_ids:
+                    _add_finding(
+                        findings,
+                        "warning",
+                        "rb4_orphan_shot_reference",
+                        f"shot {sid}（集 {ep_id}）的 prop_id {pid!r} 在本集 prop_bible 中不存在。",
+                        ev,
+                    )
 
 
 def _build_batch_summary_zh(report: ReviewBatchReport) -> str:

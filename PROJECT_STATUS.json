@@ -2,7 +2,7 @@
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-14",
   "phase": "v10_phase3_p2_review_batch_complete",
-  "status": "v10_phase3_p2_review_batch_complete_ready_for_codex_review",
+  "status": "v10_phase3_p2_review_batch_review_subsession_passed_ready_for_manual_codex_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -146,7 +146,8 @@
     "phase3_p2_review_run_codex_round2_p2_consume_header_p3_init_doc",
     "phase3_p2_review_run_codex_round3_p2_direction_e_bible_name_phantom",
     "phase3_p2_review_run_codex_round4_approved_comment_fix",
-    "phase3_p2_review_batch_landed_4_rules_rb1_rb4_full_implementation"
+    "phase3_p2_review_batch_landed_4_rules_rb1_rb4_full_implementation",
+    "phase3_p2_review_batch_codex_review_subsession_fixes_applied"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -563,7 +564,8 @@
     "v10_phase3_p2_codex_round3_p2_direction_e": "pass (direction E: _parse_prompt_header returns consumed+extra; extra header-label segment whose name hits a known bible entry but not in expected refs -> phantom; non-bible name -> body. Restores bidirectional missing+phantom contract. Codex round-3 repro 1 shot-no-prop header 道具：文件夹 + repro 2 shot-no-char header 人物：张楠 both flagged; body prose still not flagged)",
     "v10_phase3_p2_codex_round4_verdict": "approved (P1/P2/P3 blocked items closed; P3 non-blocking header comment synced to direction E semantics)",
     "v10_phase3_p2_review_batch": "pass (ReviewBatchReport + review_batch_dir engine + 4 rules rb1-rb4 cross-episode character/location/prop id consistency + orphan shot reference; graceful degradation; redact via _add_finding; read-only; harness batch_continuity full replay)",
-    "v10_phase3_p2_review_batch_pytest": "410 passed (391 + 17 batch engine tests + 2 cli tests; 0 regression)",
-    "v10_phase3_p2_review_batch_scenarios": "pass (7 scenarios; batch_continuity full replay: review-batch full + tool_invocations non-empty + every finding cites EvidenceRef)"
+    "v10_phase3_p2_review_batch_pytest": "414 passed (391 baseline + 19 batch engine tests incl 2 P2 regression + 4 cli tests incl policy + markdown; 0 regression)",
+    "v10_phase3_p2_review_batch_scenarios": "pass (7 scenarios; batch_continuity full replay: review-batch full + tool_invocations non-empty + every finding cites EvidenceRef)",
+    "v10_phase3_p2_review_batch_review_subsession": "NEEDS_FIX -> fixed: P2-1 rb4 false-positive when bible missing (isinstance guard per ref class) + P2-2 evidence locator redact (_add_finding redacts artifact/path/locator, review-run shares) + P3-1 stale docstring (run_all.py validate_live_agent_replay) + P3-2 _render_markdown batch_dir/batch_id fallback + P3-3 review-batch --write-report policy + markdown tests. P3-2 harness strength + P3-4 name->id drift deferred as open questions."
   }
 }

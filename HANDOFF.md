@@ -27,6 +27,19 @@ Phase 3 P2 review-batch 从 stub 升级为完整实现（方向 B：cross-episod
 - production fail-closed + redact + read-only 全部保留（--write-report 政策 + is_inside_repo）。
 - harness batch_continuity full replay：review-batch full + tool_invocations non-empty + 每条 finding 有 evidence。
 
+### review 子会话复审修复（待 commit）
+
+Proma 派 review 子会话（扮演 Codex-style 角色，delegation 5693ecef）做对抗式独立审查，verdict NEEDS_FIX，5 findings，本轮修齐 P2 + P3：
+
+- **P2-1 rb4 误报**：`_rule_rb4_orphan_shot_reference` 在某 bible 缺失/损坏时用空 id 集判定 -> 误报 orphan。修复：每类 ref 仅在对应 bible 是 dict 时检查（None 跳过，已由 artifact_unreadable 报告）。
+- **P2-2 evidence locator redact**：`_add_finding` 只对 message redact，EvidenceRef.locator 嵌 id 未 redact（secret-in-id 泄露）。修复：`_add_finding` 对 evidence 的 artifact/path/locator 都走 `_safe_text`（review-run + review-batch 共享，同步受益）。
+- **P3-1 stale docstring**：`run_all.py` `validate_live_agent_replay` 内联 docstring 仍描述 review-batch stub。修复：改为 full 描述。
+- **P3-3 _render_markdown + policy 测试**：`_render_markdown` fallback batch_dir/batch_id；补 review-batch `--write-report` production 仓内 refuse 测试 + markdown smoke 测试。
+- **P3-2 harness 强度**（deferred）：live replay 不校验 expected_tool_calls 覆盖。open question。
+- **P3-4 name->id 漂移**（open question）：rb1-rb3 仅查 id->name，未查 name->id。等用户拍板。
+
+回归测试：+2 engine（P2-1 rb4 不误报 + P2-2 secret-in-id locator redact）+ +2 cli（policy + markdown）。414 pytest，0 回归。
+
 ### 下一轮
 
 - **Codex 手工复审 Phase 3 P2 review-batch**（重点看 4 规则语义 / graceful / redact / read-only / harness full 断言 / 三件套对齐）。

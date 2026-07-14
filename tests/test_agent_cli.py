@@ -275,6 +275,40 @@ def test_cli_review_batch_corrupted_no_traceback(tmp_path: Path) -> None:
     assert "corrupted_batch_summary" in codes
 
 
+def test_cli_review_batch_production_repo_internal_refused(tmp_path: Path) -> None:
+    """review-batch --write-report inside repo with env=production -> rc=2."""
+    batch_dir = _make_batch(tmp_path)
+    # override env to production so --write-report policy treats it as production
+    bs_path = batch_dir / "batch_summary.json"
+    bs = json.loads(bs_path.read_text(encoding="utf-8"))
+    bs["env"] = "production"
+    bs_path.write_text(json.dumps(bs, ensure_ascii=False, indent=2), encoding="utf-8")
+    repo_internal = PROJECT_ROOT / "runs" / "test-review-batch-prod-cli-refuse.json"
+    if repo_internal.exists():
+        repo_internal.unlink()
+    try:
+        rc, _, err = _run_cli(
+            "agent", "review-batch", str(batch_dir), "--write-report", str(repo_internal)
+        )
+        assert rc == 2, f"expected rc=2, got rc={rc}; stderr: {err[-500:]}"
+        assert not repo_internal.exists(), "policy refused but file was written"
+        assert "refuses" in err.lower()
+    finally:
+        if repo_internal.exists():
+            repo_internal.unlink()
+
+
+def test_cli_review_batch_format_markdown(tmp_path: Path) -> None:
+    """review-batch --format markdown renders without crashing + cites batch dir."""
+    batch_dir = _make_batch(tmp_path)
+    rc, out, err = _run_cli("agent", "review-batch", str(batch_dir), "--format", "markdown")
+    assert rc in (0, 1), f"rc={rc}; stderr: {err[-500:]}"
+    assert "Traceback" not in err
+    # markdown title cites the batch dir (not '?'), proving _render_markdown
+    # falls back to batch_dir when run_dir is absent.
+    assert batch_dir.name in out
+
+
 def test_cli_review_run_corrupted_artifact_no_traceback(tmp_path: Path) -> None:
     """P1 regression: a legitimate-JSON / wrong-shape artifact must not
     leak a traceback. image_prompts.json as a bare list -> the engine

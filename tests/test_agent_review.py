@@ -732,3 +732,33 @@ def test_batch_redact_secret_in_finding_message(tmp_path: Path) -> None:
     blob = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
     assert secret not in blob
     assert "<redacted>" in blob
+
+
+# ----- P2-1 regression: rb4 must not false-positive when a bible is missing -----
+def test_rb4_no_false_positive_when_bible_missing(tmp_path: Path) -> None:
+    """P2-1 regression: a missing bible must not cause rb4 to flag
+    every ref of that class as orphan. The missing bible is already
+    reported by _read_artifact_safe as artifact_unreadable."""
+    ep1 = _full_episode()
+    ep1["location_bible"] = None  # missing -> artifact_unreadable
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1})
+    report = review_batch_dir(batch)
+    codes = _batch_codes(report)
+    assert "artifact_unreadable" in codes
+    # rb4 must NOT false-positive location_id='office' as orphan
+    rb4_findings = [f for f in report.findings if f.code == "rb4_orphan_shot_reference"]
+    assert not any("office" in f.message for f in rb4_findings)
+
+
+# ----- P2-2 regression: secret in id -> evidence locator redacted -----
+def test_rb4_redact_secret_in_id_evidence_locator(tmp_path: Path) -> None:
+    """P2-2 regression: a secret embedded in a character id that flows
+    into an EvidenceRef locator must be redacted (defense in depth)."""
+    secret_id = "sk-leak-id-test-12345678"
+    ep1 = _full_episode(char={"characters": [{"id": secret_id, "name": "林夏"}]})
+    ep2 = _full_episode(char={"characters": [{"id": secret_id, "name": "林夏2"}]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    blob = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert secret_id not in blob
+    assert "<redacted>" in blob

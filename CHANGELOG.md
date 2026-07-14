@@ -2,6 +2,27 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - review-batch review 子会话复审修复)
+
+Proma 派 review 子会话（扮演 Codex-style 角色，delegation 5693ecef）对 review-batch 完整实现做对抗式独立审查，verdict NEEDS_FIX，5 findings，本轮修齐 P2 + P3。
+
+### 修复
+
+- **P2-1 rb4 误报**（`planner/agent/review.py` `_rule_rb4_orphan_shot_reference`）：某 bible 缺失/损坏时用空 id 集判定 -> 误报 orphan。修复：每类 ref 仅在对应 bible 是 dict 时检查（None 跳过，已由 artifact_unreadable 报告）。
+- **P2-2 evidence locator redact**（`planner/agent/review.py` `_add_finding`）：EvidenceRef.locator 嵌 id 未 redact（secret-in-id 泄露）。修复：`_add_finding` 对 evidence 的 artifact/path/locator 都走 `_safe_text`（review-run + review-batch 共享，同步受益）。
+- **P3-1 stale docstring**（`harness/agent_scenarios/run_all.py` `validate_live_agent_replay`）：内联 docstring 仍描述 review-batch stub。修复：改为 full 描述。
+- **P3-3 _render_markdown + policy 测试**：`_render_markdown` fallback batch_dir/batch_id；补 review-batch `--write-report` production 仓内 refuse 测试 + markdown smoke 测试。
+
+### deferred / open
+
+- **P3-2 harness 强度**（deferred）：live replay 不校验 expected_tool_calls 覆盖。open question。
+- **P3-4 name->id 漂移**（open question）：rb1-rb3 仅查 id->name，未查 name->id。等用户拍板。
+
+### 验证
+
+- `python3 -m pytest` -- 414 passed（391 + 19 batch engine + 4 cli），2 warnings，零回归。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过。
+
 ## 2026-07-14 (Proma Phase 3 P2 - review-batch 完整实现)
 
 Phase 3 P2 review-batch 从 stub 升级为完整实现（方向 B：cross-episode 一致性检查）。范围由用户拍板：只做 batch 级 cross-episode 规则，不汇总 review-run 报告，不重复 per-run rv1-rv4。stale cleanup 单独 commit（872f3b4）。

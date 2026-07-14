@@ -258,9 +258,11 @@ def validate_live_agent_replay(
       ``implementation_status="full"``, ``review_version="1.0"``,
       non-empty ``tool_invocations``, and every finding carries
       evidence.
-    * ``batch_continuity``: run the ``review-batch`` stub and
-      assert exit code 0, ``implementation_status="not_implemented"``,
-      and ``tool_invocations=[]``.
+    * ``batch_continuity``: run ``planner agent review-batch``
+      (Phase 3 P2 full implementation) and assert exit code 0/1,
+      ``implementation_status="full"``, ``review_version="1.0"``,
+      non-empty ``tool_invocations``, and every finding carries
+      evidence.
     * ``approval_required_write``: shape-only (already gated by
       :func:`validate_approval_gate_shape`).
     """

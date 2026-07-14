@@ -112,9 +112,9 @@ def _render_markdown(
         "diagnose_version" if "diagnose_version" in report_dict else "review_version"
     )
     lines: list[str] = [
-        f"# {title} - {report_dict.get('run_dir', '?')}",
+        f"# {title} - {report_dict.get('run_dir') or report_dict.get('batch_dir') or '?'}",
         "",
-        f"- **run_id**: `{report_dict.get('run_id')}`",
+        f"- **run_id**: `{report_dict.get('run_id') or report_dict.get('batch_id')}`",
         f"- **env**: `{report_dict.get('env')}`",
         f"- **status**: `{report_dict.get('status')}`",
         f"- **implementation_status**: "
