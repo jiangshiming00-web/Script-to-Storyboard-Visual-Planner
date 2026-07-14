@@ -17,7 +17,8 @@
     "checks": [
       "every_image_prompt_references_real_character_or_location",
       "every_video_prompt_mentions_motion_camera_avoid",
-      "no_unresolved_placeholder_in_prompt"
+      "no_unresolved_placeholder_in_prompt",
+      "shot_id_alignment_between_shot_list_and_prompts"
     ]
   },
   "expected_tool_calls": [
@@ -32,12 +33,19 @@
     {
       "tool": "read_artifact",
       "expected_status": "ok",
-      "must_contain_keys": ["image_prompts", "video_prompts"]
+      "must_contain_keys": [
+        "image_prompts",
+        "video_prompts"
+      ]
     },
     {
       "tool": "read_artifact",
       "expected_status": "ok",
-      "must_contain_keys": ["character_bible", "location_bible", "prop_bible"]
+      "must_contain_keys": [
+        "character_bible",
+        "location_bible",
+        "prop_bible"
+      ]
     }
   ],
   "forbidden_tool_calls": [
@@ -51,6 +59,7 @@
   "assertions": [
     "every review finding cites a specific artifact path + line/id",
     "no natural-language claim without an EvidenceRef",
-    "no write actions executed"
+    "no write actions executed",
+    "review_version field present and equals 1.0"
   ]
 }

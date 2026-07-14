@@ -420,34 +420,67 @@ def validate_live_agent_replay(
         if "batch_continuity" in name:
             target = sample_batch_dir
             sub = "review-batch"
-        else:
-            target = sample_run_dir
-            sub = "review-run"
+            # review-batch is still a Phase 3 P1 stub.
+            proc = _run_planner_agent_cli(sub, str(target), cwd=PROJECT_ROOT, env=scrubbed)
+            if proc.returncode != 0:
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: stub {sub} CLI "
+                    f"failed (rc={proc.returncode}); stderr={proc.stderr}"
+                )
+            payload = json.loads(proc.stdout)
+            if payload.get("implementation_status") != "not_implemented":
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: stub {sub} expected "
+                    f"implementation_status='not_implemented', got "
+                    f"{payload.get('implementation_status')!r}"
+                )
+            if payload.get("tool_invocations") != []:
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: stub {sub} must have empty "
+                    f"tool_invocations, got {payload.get('tool_invocations')!r}"
+                )
+            _log(f"{name}: live agent replay ok (stub {sub} rc=0 + not_implemented)")
+            return
+        # review_prompt_refs -> review-run (Phase 3 P2: fully implemented)
+        target = sample_run_dir
+        sub = "review-run"
         proc = _run_planner_agent_cli(sub, str(target), cwd=PROJECT_ROOT, env=scrubbed)
-        if proc.returncode != 0:
+        if proc.returncode not in (0, 1):
             raise SystemExit(
-                f"[agent_scenarios] {name}: stub {sub} CLI "
-                f"failed (rc={proc.returncode}); stderr={proc.stderr}"
+                f"[agent_scenarios] {name}: {sub} CLI failed "
+                f"(rc={proc.returncode}); stderr={proc.stderr}"
             )
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             raise SystemExit(
-                f"[agent_scenarios] {name}: stub {sub} CLI returned "
-                f"non-JSON stdout: {proc.stdout[:500]} ({exc})"
+                f"[agent_scenarios] {name}: {sub} CLI returned non-JSON "
+                f"stdout: {proc.stdout[:500]} ({exc})"
             )
-        if payload.get("implementation_status") != "not_implemented":
+        if payload.get("implementation_status") != "full":
             raise SystemExit(
-                f"[agent_scenarios] {name}: stub {sub} expected "
-                f"implementation_status='not_implemented', got "
+                f"[agent_scenarios] {name}: {sub} expected "
+                f"implementation_status='full', got "
                 f"{payload.get('implementation_status')!r}"
             )
-        if payload.get("tool_invocations") != []:
+        if payload.get("review_version") != "1.0":
             raise SystemExit(
-                f"[agent_scenarios] {name}: stub {sub} must have empty "
-                f"tool_invocations, got {payload.get('tool_invocations')!r}"
+                f"[agent_scenarios] {name}: {sub} expected "
+                f"review_version='1.0', got {payload.get('review_version')!r}"
             )
-        _log(f"{name}: live agent replay ok (stub {sub} rc=0 + not_implemented)")
+        if not payload.get("tool_invocations"):
+            raise SystemExit(
+                f"[agent_scenarios] {name}: {sub} must have non-empty "
+                f"tool_invocations for a full implementation"
+            )
+        # Scenario assertion: every finding cites an EvidenceRef.
+        for f in payload.get("findings", []):
+            if not f.get("evidence"):
+                raise SystemExit(
+                    f"[agent_scenarios] {name}: {sub} finding "
+                    f"{f.get('code')!r} has no evidence"
+                )
+        _log(f"{name}: live agent replay ok ({sub} full + tool_invocations non-empty)")
         return
 
     # approval_gate: shape-only check is sufficient.

@@ -153,6 +153,74 @@ def test_cli_review_run_dev_run_returns_full_exit_zero(tmp_path: Path) -> None:
     assert "Traceback" not in err
 
 
+def test_cli_review_run_format_markdown(tmp_path: Path) -> None:
+    run_dir = _make_dev_run(tmp_path)
+    rc, out, err = _run_cli("agent", "review-run", str(run_dir), "--format", "markdown")
+    assert rc == 0, f"stderr: {err[-500:]}"
+    assert "# Review Report" in out
+    assert "review_version" in out
+    assert "Traceback" not in err
+
+
+def test_cli_review_run_verbose_emits_summary(tmp_path: Path) -> None:
+    run_dir = _make_dev_run(tmp_path)
+    rc, _, err = _run_cli("agent", "review-run", str(run_dir), "-v")
+    assert rc == 0, f"stderr: {err[-500:]}"
+    assert "摘要" in err
+    assert "Traceback" not in err
+
+
+def test_cli_review_run_write_report_to_tmp(tmp_path: Path) -> None:
+    run_dir = _make_dev_run(tmp_path)
+    report_path = tmp_path / "review_report.json"
+    rc, _, err = _run_cli(
+        "agent", "review-run", str(run_dir), "--write-report", str(report_path)
+    )
+    assert rc == 0, f"stderr: {err[-500:]}"
+    assert report_path.exists()
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert data["implementation_status"] == "full"
+    assert data["review_version"] == "1.0"
+
+
+def test_cli_review_run_production_repo_internal_refused(tmp_path: Path) -> None:
+    dev_run = _make_dev_run(tmp_path)
+    prod_run = _make_prod_simulated_run(tmp_path, dev_run)
+    repo_internal = PROJECT_ROOT / "runs" / "test-review-prod-cli-refuse.json"
+    if repo_internal.exists():
+        repo_internal.unlink()
+    try:
+        rc, _, err = _run_cli(
+            "agent", "review-run", str(prod_run), "--write-report", str(repo_internal)
+        )
+        assert rc == 2, f"expected rc=2, got rc={rc}; stderr: {err[-500:]}"
+        assert not repo_internal.exists(), "policy refused but file was written"
+        assert "refuses" in err.lower()
+    finally:
+        if repo_internal.exists():
+            repo_internal.unlink()
+
+
+def test_cli_review_run_errors_exit_one(tmp_path: Path) -> None:
+    run_dir = _make_dev_run(tmp_path)
+    ip_path = run_dir / "image_prompts.json"
+    ip = json.loads(ip_path.read_text(encoding="utf-8"))
+    ip["image_prompts"][0]["prompt"] = ip["image_prompts"][0]["prompt"] + " {location_name}"
+    ip_path.write_text(json.dumps(ip, ensure_ascii=False, indent=2), encoding="utf-8")
+    rc, out, err = _run_cli("agent", "review-run", str(run_dir))
+    assert rc == 1, f"expected rc=1, got rc={rc}; stderr: {err[-500:]}"
+    data = json.loads(out)
+    assert data["status"] == "errors"
+    assert "Traceback" not in err
+
+
+def test_cli_review_run_missing_dir_exits_2(tmp_path: Path) -> None:
+    rc, _, err = _run_cli("agent", "review-run", str(tmp_path / "no_such_dir"))
+    assert rc == 2
+    assert "Traceback" not in err
+    assert "does not exist" in err.lower() or "no such" in err.lower()
+
+
 def test_cli_review_batch_stub_returns_not_implemented_exit_zero(tmp_path: Path) -> None:
     run_dir = _make_dev_run(tmp_path)
     rc, out, err = _run_cli("agent", "review-batch", str(run_dir))
