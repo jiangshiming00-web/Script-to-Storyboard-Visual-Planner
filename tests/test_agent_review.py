@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from planner.agent.review import ReviewRunReport, review_run_dir
+from planner.agent.review import ReviewBatchReport, ReviewRunReport, review_batch_dir, review_run_dir
 
 # ---------- minimal valid fixtures (internally consistent) ----------
 
@@ -498,3 +498,237 @@ def test_rv1_extra_character_phantom_when_shot_has_no_char(tmp_path: Path) -> No
     codes = _codes(report)
     assert "rv1_image_prompt_bible_ref_mismatch" in codes
     assert any("张楠" in f.message and "未引用" in f.message for f in report.findings)
+
+
+# ---------- Phase 3 P2: review-batch (cross-episode consistency) ----------
+
+
+def _full_episode(
+    char: Any = None,
+    loc: Any = None,
+    prop: Any = None,
+    shots: Any = None,
+) -> Dict[str, Any]:
+    """Build a fully-reviewable episode payload (4 artifacts)."""
+    return {
+        "character_bible": char if char is not None else {"characters": [{"id": "lin_xia", "name": "林夏"}]},
+        "location_bible": loc if loc is not None else {"locations": [{"id": "office", "name": "办公室"}]},
+        "prop_bible": prop if prop is not None else {"props": [{"id": "folder", "name": "文件夹"}]},
+        "shot_list": shots if shots is not None else {"shots": [
+            {"id": "s1", "scene_id": "sc1", "location_id": "office",
+             "character_ids": ["lin_xia"], "prop_ids": ["folder"],
+             "shot_size": "medium", "camera_angle": "eye", "composition": "x",
+             "action": "x", "emotion": "x"}
+        ]},
+    }
+
+
+def _make_batch_dir(
+    tmp_path: Path,
+    *,
+    episodes: Dict[str, Dict[str, Any]],
+    batch_summary: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Build a batch dir with batch_summary.json + per-episode subdirs.
+
+    Each episode value is a dict of artifact name -> payload (None to
+    omit that artifact). A ``run_summary.json`` is always written so
+    ``list_runs_in_batch`` picks the episode up.
+    """
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    summary = batch_summary or {
+        "batch_id": "test-batch",
+        "env": "development",
+        "episodes": [
+            {"run_id": ep, "episode_id": ep, "run_dir": str(batch_dir / ep), "status": "done"}
+            for ep in episodes
+        ],
+        "totals": {"episodes": len(episodes), "done": len(episodes)},
+    }
+    (batch_dir / "batch_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+    )
+    for ep_id, arts in episodes.items():
+        ep_dir = batch_dir / ep_id
+        ep_dir.mkdir()
+        rs = arts.get("run_summary") or {"run_id": ep_id, "env": "development", "script": "x", "counts": {"shots": 1}}
+        (ep_dir / "run_summary.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        for name in ("character_bible", "location_bible", "prop_bible", "shot_list"):
+            if name in arts and arts[name] is not None:
+                (ep_dir / f"{name}.json").write_text(json.dumps(arts[name], ensure_ascii=False), encoding="utf-8")
+    return batch_dir
+
+
+def _batch_codes(report: ReviewBatchReport) -> list:
+    return [f.code for f in report.findings]
+
+
+# ----- rb1 character id consistency -----
+def test_rb1_character_name_drift_across_episodes(tmp_path: Path) -> None:
+    ep1 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏"}]})
+    ep2 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏2"}]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert "rb1_character_id_inconsistent_across_episodes" in _batch_codes(report)
+    assert report.status == "warnings"
+    finding = next(f for f in report.findings if f.code == "rb1_character_id_inconsistent_across_episodes")
+    # evidence cites each episode's character_bible (per-episode EvidenceRefs)
+    assert len(finding.evidence) == 2
+
+
+def test_rb1_consistent_name_no_finding(tmp_path: Path) -> None:
+    ep1 = _full_episode()
+    ep2 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert not any(c.startswith("rb1_") for c in _batch_codes(report))
+
+
+# ----- rb2 location id consistency -----
+def test_rb2_location_name_drift_across_episodes(tmp_path: Path) -> None:
+    ep1 = _full_episode(loc={"locations": [{"id": "office", "name": "办公室"}]})
+    ep2 = _full_episode(loc={"locations": [{"id": "office", "name": "公司"}]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert "rb2_location_id_inconsistent_across_episodes" in _batch_codes(report)
+
+
+# ----- rb3 prop id consistency -----
+def test_rb3_prop_name_drift_across_episodes(tmp_path: Path) -> None:
+    ep1 = _full_episode(prop={"props": [{"id": "folder", "name": "文件夹"}]})
+    ep2 = _full_episode(prop={"props": [{"id": "folder", "name": "档案夹"}]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert "rb3_prop_id_inconsistent_across_episodes" in _batch_codes(report)
+
+
+# ----- rb4 orphan shot reference -----
+def test_rb4_orphan_character_ref(tmp_path: Path) -> None:
+    ep1 = _full_episode(shots={"shots": [
+        {"id": "s1", "location_id": "office", "character_ids": ["lin_xia", "ghost"], "prop_ids": []}
+    ]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1})
+    report = review_batch_dir(batch)
+    assert "rb4_orphan_shot_reference" in _batch_codes(report)
+    assert any("ghost" in f.message for f in report.findings)
+
+
+def test_rb4_orphan_location_ref(tmp_path: Path) -> None:
+    ep1 = _full_episode(shots={"shots": [
+        {"id": "s1", "location_id": "nowhere", "character_ids": [], "prop_ids": []}
+    ]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1})
+    report = review_batch_dir(batch)
+    assert "rb4_orphan_shot_reference" in _batch_codes(report)
+    assert any("nowhere" in f.message for f in report.findings)
+
+
+def test_rb4_no_orphan_when_clean(tmp_path: Path) -> None:
+    ep1 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1})
+    report = review_batch_dir(batch)
+    assert "rb4_orphan_shot_reference" not in _batch_codes(report)
+
+
+# ----- single episode: rb1-rb3 skipped, rb4 still runs -----
+def test_single_episode_skips_cross_episode_rules(tmp_path: Path) -> None:
+    ep1 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1})
+    report = review_batch_dir(batch)
+    codes = _batch_codes(report)
+    assert not any(c.startswith(("rb1_", "rb2_", "rb3_")) for c in codes)
+
+
+# ----- graceful: batch_summary -----
+def test_missing_batch_summary_emits_error(tmp_path: Path) -> None:
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    report = review_batch_dir(batch)
+    assert "missing_batch_summary" in _batch_codes(report)
+    assert report.status == "errors"
+    assert report.implementation_status == "full"
+
+
+def test_corrupted_batch_summary_emits_error(tmp_path: Path) -> None:
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    (batch / "batch_summary.json").write_text("{bad json", encoding="utf-8")
+    report = review_batch_dir(batch)
+    assert "corrupted_batch_summary" in _batch_codes(report)
+    assert report.status == "errors"
+
+
+def test_nondict_batch_summary_no_traceback(tmp_path: Path) -> None:
+    """P1 guard mirror: a non-dict top level must not leak AttributeError."""
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    (batch / "batch_summary.json").write_text("[1, 2, 3]", encoding="utf-8")
+    report = review_batch_dir(batch)
+    assert "corrupted_batch_summary" in _batch_codes(report)
+    assert report.status == "errors"
+
+
+def test_empty_batch_no_reviewable_episodes(tmp_path: Path) -> None:
+    batch = _make_batch_dir(tmp_path, episodes={})
+    report = review_batch_dir(batch)
+    assert "batch_no_reviewable_episodes" in _batch_codes(report)
+    assert report.counts["episodes"] == 0
+
+
+# ----- graceful: per-episode artifact missing -----
+def test_missing_episode_artifact_skips_cross_episode_rules(tmp_path: Path) -> None:
+    # EP01 missing character_bible -> not fully reviewable; EP02 alone <2
+    ep1 = _full_episode()
+    ep1["character_bible"] = None
+    ep2 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    codes = _batch_codes(report)
+    assert not any(c.startswith("rb1_") for c in codes)
+    assert "artifact_unreadable" in codes
+
+
+# ----- env_mismatch -----
+def test_batch_env_mismatch_warning(tmp_path: Path) -> None:
+    ep1 = _full_episode()
+    ep2 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch, expected_env="production")
+    assert "env_mismatch" in _batch_codes(report)
+
+
+# ----- status + counts + tool_invocations -----
+def test_batch_status_ok_when_clean(tmp_path: Path) -> None:
+    ep1 = _full_episode()
+    ep2 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert report.status == "ok"
+    assert report.counts["episodes"] == 2
+    assert report.counts["episodes_reviewed"] == 2
+
+
+def test_batch_tool_invocations_recorded(tmp_path: Path) -> None:
+    # read_batch_summary + list_runs_in_batch + 2 episodes x 4 read_artifact = 2 + 8 = 10
+    ep1 = _full_episode()
+    ep2 = _full_episode()
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    assert len(report.tool_invocations) == 10
+    tools = [t.tool for t in report.tool_invocations]
+    assert tools[0] == "read_batch_summary"
+    assert "list_runs_in_batch" in tools
+    assert tools.count("read_artifact") == 8
+
+
+# ----- redact -----
+def test_batch_redact_secret_in_finding_message(tmp_path: Path) -> None:
+    secret = "sk-leak-test-redact-12345678"
+    ep1 = _full_episode(char={"characters": [{"id": "lin_xia", "name": secret}]})
+    ep2 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏"}]})
+    batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
+    report = review_batch_dir(batch)
+    blob = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert secret not in blob
+    assert "<redacted>" in blob

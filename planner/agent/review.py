@@ -55,6 +55,7 @@ from .diagnose import (
     ToolInvocation,
 )
 from .redact import redact_secrets_text
+from .readers import load_batch_summary, list_runs_in_batch
 from .tools import list_artifacts as _tools_list_artifacts, read_artifact, read_run_summary
 
 # ---------- Pydantic model ----------
@@ -699,4 +700,396 @@ def review_run_dir(
     return report.derive_status()
 
 
-__all__ = ["ReviewRunReport", "review_run_dir"]
+# ---------- Phase 3 P2: review-batch (cross-episode consistency) ----------
+
+# Artifacts review-batch needs per episode (subset of KNOWN_ARTIFACTS).
+# Unlike review-run, review-batch does NOT read image/video prompts -
+# cross-episode rules only need bibles + shot_list. See
+# harness/agent_scenarios/batch_continuity.json expected_tool_calls.
+_BATCH_REVIEW_ARTIFACTS = (
+    "character_bible",
+    "location_bible",
+    "prop_bible",
+    "shot_list",
+)
+
+
+class ReviewBatchReport(BaseModel):
+    """Top-level cross-episode review report for one batch.
+
+    Mirrors :class:`ReviewRunReport` shape but operates at batch level:
+    reads each episode's bibles + shot_list and checks cross-episode
+    id consistency + orphan shot references. Does NOT delegate to
+    ``validate_run`` and does NOT re-run per-run rv1-rv4 rules (those
+    need image/video prompts; see :func:`review_run_dir`).
+    """
+
+    batch_dir: str
+    batch_id: Optional[str] = None
+    env: Optional[str] = None
+    expected_env: Optional[str] = None
+    status: ReportStatus = "ok"
+    implementation_status: ImplementationStatus = "full"
+    review_version: Literal["1.0"] = "1.0"
+    summary: str = ""
+    counts: Dict[str, int] = Field(default_factory=dict)
+    findings: List[DiagnoseFinding] = Field(default_factory=list)
+    tool_invocations: List[ToolInvocation] = Field(default_factory=list)
+    generated_at: str = ""
+
+    def derive_status(self) -> "ReviewBatchReport":
+        """Recompute ``status`` from findings. Returns self."""
+        if any(f.severity == "error" for f in self.findings):
+            self.status = "errors"
+        elif any(f.severity == "warning" for f in self.findings):
+            self.status = "warnings"
+        else:
+            self.status = "ok"
+        return self
+
+
+def _rule_rb1_character_id_consistency(
+    episodes: List[tuple],
+    findings: List[DiagnoseFinding],
+) -> None:
+    """rb1: same character id across episodes must have a consistent name.
+
+    A character id appearing in >1 episode with differing names is a
+    continuity drift (warning). ``episodes`` is a list of
+    ``(run_dir, episode_id, arts)`` tuples.
+    """
+    index: Dict[str, List[tuple]] = {}
+    for run_dir, ep_id, arts in episodes:
+        char_bible = arts.get("character_bible")
+        if not isinstance(char_bible, dict):
+            continue
+        for c in (char_bible.get("characters") or []):
+            if not isinstance(c, dict):
+                continue
+            cid = c.get("id")
+            if cid is None:
+                continue
+            index.setdefault(cid, []).append((ep_id, c.get("name"), run_dir))
+    for cid, occ in index.items():
+        names = set(n for _, n, _ in occ if n is not None)
+        if len(names) > 1:
+            ev = [
+                EvidenceRef(
+                    artifact="character_bible.json",
+                    path=str(rd / "character_bible.json"),
+                    locator=f"$.characters[?(@.id=='{cid}')].name",
+                )
+                for _, _, rd in occ
+            ]
+            pairs = " / ".join(f"{ep}={n!r}" for ep, n, _ in occ)
+            _add_finding(
+                findings,
+                "warning",
+                "rb1_character_id_inconsistent_across_episodes",
+                f"角色 id {cid!r} 跨集 name 不一致（{pairs}）；同一 id 跨集应保持同一 name。",
+                ev,
+            )
+
+
+def _rule_rb2_location_id_consistency(
+    episodes: List[tuple],
+    findings: List[DiagnoseFinding],
+) -> None:
+    """rb2: same location id across episodes must have a consistent name."""
+    index: Dict[str, List[tuple]] = {}
+    for run_dir, ep_id, arts in episodes:
+        loc_bible = arts.get("location_bible")
+        if not isinstance(loc_bible, dict):
+            continue
+        for loc in (loc_bible.get("locations") or []):
+            if not isinstance(loc, dict):
+                continue
+            lid = loc.get("id")
+            if lid is None:
+                continue
+            index.setdefault(lid, []).append((ep_id, loc.get("name"), run_dir))
+    for lid, occ in index.items():
+        names = set(n for _, n, _ in occ if n is not None)
+        if len(names) > 1:
+            ev = [
+                EvidenceRef(
+                    artifact="location_bible.json",
+                    path=str(rd / "location_bible.json"),
+                    locator=f"$.locations[?(@.id=='{lid}')].name",
+                )
+                for _, _, rd in occ
+            ]
+            pairs = " / ".join(f"{ep}={n!r}" for ep, n, _ in occ)
+            _add_finding(
+                findings,
+                "warning",
+                "rb2_location_id_inconsistent_across_episodes",
+                f"场景 id {lid!r} 跨集 name 不一致（{pairs}）；同一 id 跨集应保持同一 name。",
+                ev,
+            )
+
+
+def _rule_rb3_prop_id_consistency(
+    episodes: List[tuple],
+    findings: List[DiagnoseFinding],
+) -> None:
+    """rb3: same prop id across episodes must have a consistent name."""
+    index: Dict[str, List[tuple]] = {}
+    for run_dir, ep_id, arts in episodes:
+        prop_bible = arts.get("prop_bible")
+        if not isinstance(prop_bible, dict):
+            continue
+        for p in (prop_bible.get("props") or []):
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id")
+            if pid is None:
+                continue
+            index.setdefault(pid, []).append((ep_id, p.get("name"), run_dir))
+    for pid, occ in index.items():
+        names = set(n for _, n, _ in occ if n is not None)
+        if len(names) > 1:
+            ev = [
+                EvidenceRef(
+                    artifact="prop_bible.json",
+                    path=str(rd / "prop_bible.json"),
+                    locator=f"$.props[?(@.id=='{pid}')].name",
+                )
+                for _, _, rd in occ
+            ]
+            pairs = " / ".join(f"{ep}={n!r}" for ep, n, _ in occ)
+            _add_finding(
+                findings,
+                "warning",
+                "rb3_prop_id_inconsistent_across_episodes",
+                f"道具 id {pid!r} 跨集 name 不一致（{pairs}）；同一 id 跨集应保持同一 name。",
+                ev,
+            )
+
+
+def _rule_rb4_orphan_shot_reference(
+    run_dir: Path,
+    ep_id: str,
+    arts: Dict[str, Optional[Dict[str, Any]]],
+    findings: List[DiagnoseFinding],
+) -> None:
+    """rb4: every shot's bible id refs must exist in this episode's bibles.
+
+    Checks ``location_id`` / ``character_ids[]`` / ``prop_ids[]`` of
+    each shot against the episode's own bibles. An orphan reference
+    (shot names a bible id absent from this episode) is a warning.
+    """
+    shot_list = arts.get("shot_list")
+    if not isinstance(shot_list, dict):
+        return
+    char_bible = arts.get("character_bible")
+    loc_bible = arts.get("location_bible")
+    prop_bible = arts.get("prop_bible")
+    char_ids = {
+        c.get("id") for c in ((char_bible or {}).get("characters") or [])
+        if isinstance(c, dict)
+    }
+    loc_ids = {
+        loc.get("id") for loc in ((loc_bible or {}).get("locations") or [])
+        if isinstance(loc, dict)
+    }
+    prop_ids = {
+        p.get("id") for p in ((prop_bible or {}).get("props") or [])
+        if isinstance(p, dict)
+    }
+    for s in (shot_list.get("shots") or []):
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id")
+        ev = [EvidenceRef(artifact="shot_list.json", path=str(run_dir / "shot_list.json"), locator=f"$.shots[?(@.id=='{sid}')]")]
+        loc_id = s.get("location_id")
+        if loc_id is not None and loc_id not in loc_ids:
+            _add_finding(
+                findings,
+                "warning",
+                "rb4_orphan_shot_reference",
+                f"shot {sid}（集 {ep_id}）的 location_id {loc_id!r} 在本集 location_bible 中不存在。",
+                ev,
+            )
+        for cid in (s.get("character_ids") or []):
+            if cid not in char_ids:
+                _add_finding(
+                    findings,
+                    "warning",
+                    "rb4_orphan_shot_reference",
+                    f"shot {sid}（集 {ep_id}）的 character_id {cid!r} 在本集 character_bible 中不存在。",
+                    ev,
+                )
+        for pid in (s.get("prop_ids") or []):
+            if pid not in prop_ids:
+                _add_finding(
+                    findings,
+                    "warning",
+                    "rb4_orphan_shot_reference",
+                    f"shot {sid}（集 {ep_id}）的 prop_id {pid!r} 在本集 prop_bible 中不存在。",
+                    ev,
+                )
+
+
+def _build_batch_summary_zh(report: ReviewBatchReport) -> str:
+    """Build a 1-3 sentence Chinese summary for a batch review."""
+    if report.batch_id is None and report.env is None:
+        return (
+            "未能读取 batch_summary.json；"
+            f"review 只报告了 {len(report.findings)} 条 finding（见 findings 列表）。"
+        )
+    env_label = report.env or "未知"
+    bid = report.batch_id or "?"
+    eps = report.counts.get("episodes", 0)
+    lines: List[str] = [f"batch {bid}（env={env_label}，共 {eps} 集）。"]
+    n_err = sum(1 for f in report.findings if f.severity == "error")
+    n_warn = sum(1 for f in report.findings if f.severity == "warning")
+    findings_summary: List[str] = []
+    if n_err:
+        findings_summary.append(f"{n_err} 条 error")
+    if n_warn:
+        findings_summary.append(f"{n_warn} 条 warning")
+    if findings_summary:
+        lines.append("本次 review 发现 " + " 和 ".join(findings_summary) + "。")
+    elif report.status == "ok":
+        lines.append("未发现跨集一致性问题。")
+    return "".join(lines)
+
+
+def review_batch_dir(
+    batch_dir: Path,
+    *,
+    expected_env: Optional[str] = None,
+) -> ReviewBatchReport:
+    """Cross-episode consistency review of a batch.
+
+    Read-only: never writes files, never calls LLM / shell, never
+    triggers another batch run. Graceful degradation: missing /
+    corrupted ``batch_summary.json`` -> error + minimal report; an
+    episode with a missing / corrupted artifact is skipped for
+    dependent rules (warning finding recorded via _read_artifact_safe).
+
+    Reads each episode's ``character_bible`` / ``location_bible`` /
+    ``prop_bible`` / ``shot_list`` and runs 4 rules:
+
+    * rb1/rb2/rb3 - same character / location / prop id across
+      episodes must have a consistent name (cross-episode drift).
+      Skipped when fewer than 2 episodes are fully reviewable.
+    * rb4 - every shot's bible id refs must exist in the shot's own
+      episode bible (orphan reference check).
+    """
+    batch_dir = Path(batch_dir)
+    report = ReviewBatchReport(
+        batch_dir=str(batch_dir),
+        expected_env=expected_env,
+        generated_at=_now_iso(),
+        tool_invocations=[],
+    )
+
+    # ----- Step 0: load batch_summary.json (missing/corrupted -> error) -----
+    summary, err = load_batch_summary(batch_dir)
+    bs_path = batch_dir / "batch_summary.json"
+    if err is not None or not isinstance(summary, dict):
+        if err and "not found" in err:
+            code = "missing_batch_summary"
+            message = (
+                "batch_summary.json 不存在；agent 无法 review 本次 batch。"
+                "请确认 batch_dir 路径正确，且 planner batch 已成功完成。"
+            )
+        else:
+            code = "corrupted_batch_summary"
+            message = (
+                f"batch_summary.json 损坏（{_safe_text(err or '顶层非 JSON 对象')}）；"
+                "agent 将输出最小化报告。"
+            )
+        report.findings.append(
+            DiagnoseFinding(
+                severity="error",
+                code=code,
+                message=_safe_text(message),
+                evidence=[EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$")],
+            )
+        )
+        report.tool_invocations.append(
+            ToolInvocation(tool="read_batch_summary", ok=False, artifact_refs=["batch_summary.json"], bytes_read=0)
+        )
+        report.summary = _build_batch_summary_zh(report)
+        return report.derive_status()
+
+    report.tool_invocations.append(
+        ToolInvocation(
+            tool="read_batch_summary",
+            ok=True,
+            artifact_refs=["batch_summary.json"],
+            bytes_read=bs_path.stat().st_size if bs_path.is_file() else 0,
+        )
+    )
+    report.batch_id = summary.get("batch_id")
+    report.env = summary.get("env")
+
+    # expected_env mismatch (warning, mirrors review-run env_mismatch)
+    if expected_env and report.env and expected_env != report.env:
+        _add_finding(
+            report.findings,
+            "warning",
+            "env_mismatch",
+            f"batch_summary.env={report.env!r} 与 --expected-env={expected_env!r} 不一致。",
+            [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.env")],
+        )
+
+    # ----- Step 1: list_runs_in_batch -----
+    run_dirs = list_runs_in_batch(batch_dir)
+    report.tool_invocations.append(
+        ToolInvocation(tool="list_runs_in_batch", ok=True, artifact_refs=["batch_summary.json"], bytes_read=0)
+    )
+    if not run_dirs:
+        _add_finding(
+            report.findings,
+            "warning",
+            "batch_no_reviewable_episodes",
+            "batch 目录下没有含 run_summary.json 的 episode 子目录；无法做跨集检查。",
+            [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.episodes")],
+        )
+        report.counts = {"episodes": 0, "episodes_reviewed": 0, "findings": len(report.findings)}
+        report.summary = _build_batch_summary_zh(report)
+        return report.derive_status()
+
+    # ----- Step 2: per-episode read 4 artifacts (graceful via _read_artifact_safe) -----
+    episodes: List[tuple] = []  # (run_dir, episode_id, arts)
+    for rd in run_dirs:
+        ep_id = rd.name
+        arts: Dict[str, Optional[Dict[str, Any]]] = {}
+        for name in _BATCH_REVIEW_ARTIFACTS:
+            arts[name] = _read_artifact_safe(rd, name, report.findings, report.tool_invocations)
+        episodes.append((rd, ep_id, arts))
+
+    # ----- Step 3: rules -----
+    # rb1-rb3 cross-episode consistency (need >=2 fully-reviewable episodes)
+    reviewable = [
+        (rd, ep, arts) for rd, ep, arts in episodes
+        if all(arts.get(n) is not None for n in _BATCH_REVIEW_ARTIFACTS)
+    ]
+    if len(reviewable) >= 2:
+        _rule_rb1_character_id_consistency(reviewable, report.findings)
+        _rule_rb2_location_id_consistency(reviewable, report.findings)
+        _rule_rb3_prop_id_consistency(reviewable, report.findings)
+    # rb4 orphan shot reference (per-episode; needs shot_list + >=1 bible)
+    for rd, ep, arts in episodes:
+        if arts.get("shot_list") is not None and (
+            arts.get("character_bible") is not None
+            or arts.get("location_bible") is not None
+            or arts.get("prop_bible") is not None
+        ):
+            _rule_rb4_orphan_shot_reference(rd, ep, arts, report.findings)
+
+    # ----- Step 4: counts + summary + derive_status -----
+    report.counts = {
+        "episodes": len(run_dirs),
+        "episodes_reviewed": len(reviewable),
+        "findings": len(report.findings),
+    }
+    report.summary = _build_batch_summary_zh(report)
+    return report.derive_status()
+
+
+__all__ = ["ReviewRunReport", "review_run_dir", "ReviewBatchReport", "review_batch_dir"]

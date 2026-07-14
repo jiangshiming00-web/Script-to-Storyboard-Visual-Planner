@@ -28,13 +28,12 @@ two checks:
    in stdout / --write-report file / stderr (closed after Codex
    found the ``provider_runtime`` exit was unredacted); the
    review_* scenarios split: ``review_prompt_refs`` (review-run,
-   Phase 3 P2 full) asserts ``implementation_status = "full"`` +
-   ``review_version = "1.0"`` + non-empty ``tool_invocations``;
-   ``batch_continuity`` (review-batch, still a stub) asserts
-   ``implementation_status = "not_implemented"`` + empty
-   ``tool_invocations``. This catches real runtime defects (e.g.
-   secret leak in newly added exit surfaces) that static shape +
-   artifact existence cannot.
+   Phase 3 P2 full) and ``batch_continuity`` (review-batch,
+   Phase 3 P2 full) both assert ``implementation_status = "full"``
+   + ``review_version = "1.0"`` + non-empty ``tool_invocations`` +
+   every finding cites an EvidenceRef. This catches real runtime
+   defects (e.g. secret leak in newly added exit surfaces) that
+   static shape + artifact existence cannot.
 
 The runner does NOT trigger any write actions (it reads the
 generated run dir and invokes the read-only ``planner agent
@@ -421,38 +420,19 @@ def validate_live_agent_replay(
         return
 
     # ------------------------------------------------------------------
-    # review_* scenarios: review-run is a Phase 3 P2 full
-    # implementation; review-batch is still a stub. The branches
-    # below assert the right contract for each.
+    # review_* scenarios: review-run (single-run prompt-bible) and
+    # review-batch (cross-episode id consistency) are both Phase 3 P2
+    # full implementations. batch_continuity targets a batch; the
+    # rest target a single run. Both share the same full-impl contract.
     # ------------------------------------------------------------------
     if cat == "review":
         if "batch_continuity" in name:
             target = sample_batch_dir
             sub = "review-batch"
-            # review-batch is still a Phase 3 P1 stub.
-            proc = _run_planner_agent_cli(sub, str(target), cwd=PROJECT_ROOT, env=scrubbed)
-            if proc.returncode != 0:
-                raise SystemExit(
-                    f"[agent_scenarios] {name}: stub {sub} CLI "
-                    f"failed (rc={proc.returncode}); stderr={proc.stderr}"
-                )
-            payload = json.loads(proc.stdout)
-            if payload.get("implementation_status") != "not_implemented":
-                raise SystemExit(
-                    f"[agent_scenarios] {name}: stub {sub} expected "
-                    f"implementation_status='not_implemented', got "
-                    f"{payload.get('implementation_status')!r}"
-                )
-            if payload.get("tool_invocations") != []:
-                raise SystemExit(
-                    f"[agent_scenarios] {name}: stub {sub} must have empty "
-                    f"tool_invocations, got {payload.get('tool_invocations')!r}"
-                )
-            _log(f"{name}: live agent replay ok (stub {sub} rc=0 + not_implemented)")
-            return
-        # review_prompt_refs -> review-run (Phase 3 P2: fully implemented)
-        target = sample_run_dir
-        sub = "review-run"
+        else:
+            # review_prompt_refs -> review-run
+            target = sample_run_dir
+            sub = "review-run"
         proc = _run_planner_agent_cli(sub, str(target), cwd=PROJECT_ROOT, env=scrubbed)
         if proc.returncode not in (0, 1):
             raise SystemExit(

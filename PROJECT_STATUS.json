@@ -1,14 +1,38 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-14",
-  "phase": "v10_phase3_p2_review_run_codex_approved",
-  "status": "v10_phase3_p2_review_run_codex_approved_ready_for_review_batch",
+  "phase": "v10_phase3_p2_review_batch_complete",
+  "status": "v10_phase3_p2_review_batch_complete_ready_for_codex_review",
   "owner_plan": {
-    "codex": ["architecture_design", "schema_audit", "review", "handoff_docs"],
-    "proma": ["implementation", "tests", "bugfixes"],
-    "zcode": ["implementation", "tests", "bugfixes", "validation_tools"],
-    "harness_engineering": ["release_smoke_harness", "fake_model_harness", "gui_smoke_harness", "agent_scenario_harness", "permission_trace_replay_harness"],
-    "human": ["creative_decisions", "tool_account_access", "quality_approval"]
+    "codex": [
+      "architecture_design",
+      "schema_audit",
+      "review",
+      "handoff_docs"
+    ],
+    "proma": [
+      "implementation",
+      "tests",
+      "bugfixes"
+    ],
+    "zcode": [
+      "implementation",
+      "tests",
+      "bugfixes",
+      "validation_tools"
+    ],
+    "harness_engineering": [
+      "release_smoke_harness",
+      "fake_model_harness",
+      "gui_smoke_harness",
+      "agent_scenario_harness",
+      "permission_trace_replay_harness"
+    ],
+    "human": [
+      "creative_decisions",
+      "tool_account_access",
+      "quality_approval"
+    ]
   },
   "completed_steps": [
     "proma_create_code_skeleton_with_environment_separation",
@@ -121,7 +145,8 @@
     "phase3_p2_review_run_codex_fixes_p1_traceback_p2_header_p3_docstring",
     "phase3_p2_review_run_codex_round2_p2_consume_header_p3_init_doc",
     "phase3_p2_review_run_codex_round3_p2_direction_e_bible_name_phantom",
-    "phase3_p2_review_run_codex_round4_approved_comment_fix"
+    "phase3_p2_review_run_codex_round4_approved_comment_fix",
+    "phase3_p2_review_batch_landed_4_rules_rb1_rb4_full_implementation"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -201,7 +226,6 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_review_batch_implementation_bible_merge_across_episodes",
     "phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
@@ -250,7 +274,7 @@
         "planner/agent/readers.py (load_run_summary / load_artifact / list_artifacts / load_batch_summary / list_runs_in_batch; graceful degradation)",
         "planner/agent/diagnose.py (Pydantic models + 13 rules + Chinese summary builder + graceful entry)",
         "planner/agent/tools.py (6 read-only tool functions + TOOL_REGISTRY + TOOL_ARTIFACT_MAP mirroring harness)",
-        "planner/agent/review.py (ReviewRunReport + review_run_dir engine + 4 rules rv1-rv4 + graceful + redact; Phase 3 P2 + Codex round1 P1/P2/P3 + round2 _consume_header_names + round3 P2 direction E _parse_prompt_header consumed+extra + bible-name phantom, restores bidirectional contract)"
+        "planner/agent/review.py (ReviewRunReport + review_run_dir engine + 4 rules rv1-rv4 + ReviewBatchReport + review_batch_dir engine + 4 rules rb1-rb4 cross-episode id consistency + orphan shot reference; graceful + redact; Phase 3 P2 + Codex round1-4 review-run + review-batch full)"
       ],
       "diagnostic_rules": [
         "R1 production_fallback_used (delegated to validate_run)",
@@ -272,8 +296,8 @@
         "tests/test_agent_readers.py (13 tests for graceful loads + size cap)",
         "tests/test_agent_tools.py (9 tests for registry alignment + delegation + TOOL_ARTIFACT_MAP sync)",
         "tests/test_agent_diagnose.py (29 tests for 13 rules + status derivation + stub + 5 redact exit surfaces + substring routing)",
-        "tests/test_agent_cli.py (15 subprocess tests: diagnose 5 + review-run 9 + review-batch 1; +2 Codex P1 traceback-guard regression)",
-        "tests/test_agent_review.py (36 tests for 4 rules rv1-rv4 + graceful + status + tool_invocations + redact + Codex P1/P2 regression + round2 repro + round3 expected=0 bible-name phantom regression)"
+        "tests/test_agent_cli.py (17 subprocess tests: diagnose 5 + review-run 9 + review-batch 3; +2 Codex P1 traceback-guard regression)",
+        "tests/test_agent_review.py (53 tests for 4 rv1-rv4 rules + 4 rb1-rb4 batch rules + graceful + status + tool_invocations + redact + single-episode skip + empty batch + Codex regression)"
       ],
       "hard_boundary": "planner/agent/ has no write paths except the explicit --write-report CLI option. --write-report goes through is_inside_repo and refuses production writes inside the repo (mirroring cli.run_cmd policy)."
     },
@@ -315,10 +339,25 @@
       "production_explicit_inside_repo": "REJECTED as EnvironmentBoundaryError"
     },
     "gui_optional_extras": {
-      "gui": ["fastapi", "uvicorn[standard]", "pywebview", "python-multipart"],
-      "server": ["fastapi", "uvicorn", "python-multipart"],
-      "build": ["pyinstaller"],
-      "dev (gains httpx for TestClient)": ["pytest", "jsonschema", "httpx"]
+      "gui": [
+        "fastapi",
+        "uvicorn[standard]",
+        "pywebview",
+        "python-multipart"
+      ],
+      "server": [
+        "fastapi",
+        "uvicorn",
+        "python-multipart"
+      ],
+      "build": [
+        "pyinstaller"
+      ],
+      "dev (gains httpx for TestClient)": [
+        "pytest",
+        "jsonschema",
+        "httpx"
+      ]
     }
   },
   "verification": {
@@ -456,7 +495,7 @@
     "v10_phase2_harness_permission_boundaries_implemented": "pass (8 steps: 4 PLANNER_* env-var reject / tampered production.json reject / repo out_dir reject / app-data out_dir success / load_model_config rejects sk- api_key_env / run_summary.json no API key value leak / executor_tasks tool=None + no vendor leak / 7 agent rules printed)",
     "v10_phase2_harness_agent_scenarios_implemented": "pass (4 JSON scenarios: diagnose_failed_run / review_prompt_refs / batch_continuity / approval_required_write; run_all.py 验证 shape + expected∩forbidden=∅ + approval-gate 形状 + 真 run/batch 生成的 artifacts 适用)",
     "v10_phase2_no_product_agent_implemented": "pass (historical, pre-Phase 3 P1; planner/agent/ now exists with 6 flat files + 13 rules + 3 Click subcommands; harness now replays real agent CLI in addition to cross-check; see v10_phase3_p1_agent_module_landed + v10_phase3_p1_harness_3_new_scenarios for current state)",
-    "v10_phase2_no_arbitrary_shell": "pass (harness 自身只跑被显式 allowlist 的 `python3 -m planner / planner.web` 子命令; agent scenario 显式禁止 execute_arbitrary_shell)",
+    "v10_phase2_no_arbitrary_shell": "pass (harness 自身 subprocess allowlist + agent scenario 显式 forbid execute_arbitrary_shell)",
     "v10_phase2_repo_runs_unchanged": "pass (仓库 runs/ 仍只含根 .gitkeep; 所有 smoke 产物落 /tmp/smoke_*_<pid>)",
     "v10_rc_p1_1_model_config_injected_into_provider_via_get_provider_settings": "pass (8 end-to-end tests: settings injection + production fail-closed + dev fallback audit + CLI --model-config + no key leak)",
     "v10_rc_p1_1_run_summary_provider_runtime_audit_field": "pass (model/base_url/api_key_env/enable_real_model_calls; None for deterministic)",
@@ -508,7 +547,6 @@
     "v10_phase3_p1_test_count": "pass (379 pytest after P2 review-run = 271 baseline + 17 redact + 13 readers + 9 tools + 29 diagnose + 13 cli + 26 review + 1 boundaries; 0 regression)",
     "v10_phase3_p2_review_run": "pass (ReviewRunReport + review_run_dir engine + 4 rules: rv1 image_prompt_bible_ref_mismatch warning header-bible bidirectional / rv2 video_prompt_missing_field warning / rv3 unresolved_placeholder error / rv4 shot_id_misaligned warning; graceful degradation; redact via _add_finding; 8 tool_invocations read_run_summary+list_artifacts+read_artifact x6; harness review-run replay full; 26 test_agent_review + 6 new test_agent_cli)",
     "v10_phase3_p1_cli_subprocess_smoke": "pass (--help shows agent + 3 subcommands; diagnose dev run = exit 0 + JSON to stdout; missing dir = exit 2 + no Traceback in stderr; --write-report /tmp = exit 0 + file 1662 bytes; dev + repo-internal --write-report = exit 0 + WARNING + file; production + repo-internal --write-report = exit 2 + no file; stubs rc=0 + not_implemented)",
-    "v10_phase2_no_arbitrary_shell": "pass (harness 自身 subprocess allowlist + agent scenario 显式 forbid execute_arbitrary_shell)",
     "v10_phase2_no_real_os_app_data_pollution": "pass (smoke_gui sets PLANNER_APP_DATA_ROOT + PLANNER_MODEL_CONFIG_PATH; smoke_cli passes --model-config explicit deterministic; smoke_install creates fresh venv; repo runs/ only contains .gitkeep after the rework run)",
     "v10_phase2_pytest_after_rework": "271 passed (267 base + 3 new is_inside_repo tests in test_boundaries.py + 2 new env-override tests in test_web_run_service.py + others already in baseline); no regressions",
     "v10_phase3_p2_codex_fixes_pytest": "387 passed (379 + 6 engine + 2 cli; 0 regression)",
@@ -523,6 +561,9 @@
     "v10_phase3_p2_codex_round3_pytest": "391 passed (389 + 2 Codex round-3 phantom regression; 0 regression)",
     "v10_phase3_p2_codex_round3_scenarios": "pass (7 scenarios; review_prompt_refs full replay)",
     "v10_phase3_p2_codex_round3_p2_direction_e": "pass (direction E: _parse_prompt_header returns consumed+extra; extra header-label segment whose name hits a known bible entry but not in expected refs -> phantom; non-bible name -> body. Restores bidirectional missing+phantom contract. Codex round-3 repro 1 shot-no-prop header 道具：文件夹 + repro 2 shot-no-char header 人物：张楠 both flagged; body prose still not flagged)",
-    "v10_phase3_p2_codex_round4_verdict": "approved (P1/P2/P3 blocked items closed; P3 non-blocking header comment synced to direction E semantics)"
+    "v10_phase3_p2_codex_round4_verdict": "approved (P1/P2/P3 blocked items closed; P3 non-blocking header comment synced to direction E semantics)",
+    "v10_phase3_p2_review_batch": "pass (ReviewBatchReport + review_batch_dir engine + 4 rules rb1-rb4 cross-episode character/location/prop id consistency + orphan shot reference; graceful degradation; redact via _add_finding; read-only; harness batch_continuity full replay)",
+    "v10_phase3_p2_review_batch_pytest": "410 passed (391 + 17 batch engine tests + 2 cli tests; 0 regression)",
+    "v10_phase3_p2_review_batch_scenarios": "pass (7 scenarios; batch_continuity full replay: review-batch full + tool_invocations non-empty + every finding cites EvidenceRef)"
   }
 }

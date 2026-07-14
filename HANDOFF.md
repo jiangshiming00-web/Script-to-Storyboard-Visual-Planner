@@ -1,5 +1,38 @@
 # Handoff
 
+## 当前状态（2026-07-14 - Phase 3 P2 review-batch 完工，待 Codex 复审）
+
+Phase 3 P2 review-batch 从 stub 升级为完整实现（方向 B：cross-episode 一致性检查）。stale cleanup 已单独 commit（872f3b4）。review-batch 实现 + 测试 + harness + 三件套同步完成，待 Codex 手工复审。
+
+### review-batch 实现（`planner/agent/review.py`）
+
+- `ReviewBatchReport` model（镜像 ReviewRunReport，batch 级）
+- `review_batch_dir()` engine + 4 cross-episode 规则：
+  - rb1 `rb1_character_id_inconsistent_across_episodes` (warning)：同 character id 跨集 name 不一致（漂移）
+  - rb2 `rb2_location_id_inconsistent_across_episodes` (warning)：同 location id 跨集 name 漂移
+  - rb3 `rb3_prop_id_inconsistent_across_episodes` (warning)：同 prop id 跨集 name 漂移
+  - rb4 `rb4_orphan_shot_reference` (warning)：shot 的 location_id/character_ids/prop_ids 不在本集 bible
+- graceful degradation（missing/corrupted batch_summary -> error；per-episode artifact 缺失 -> warning + 跳过依赖规则）
+- redact 出口（`_add_finding` 统一 `_safe_text`，复用 review-run 的 helper）
+- 不委托 validate_run；不重复 per-run rv1-rv4；read-only
+- CLI `review_batch_cmd` 从 stub 升级为 full（加 `--expected-env`/`--format`/`--verbose`，镜像 review_run_cmd）
+- 单集 batch：rb1-rb3 跳过（<2 集无跨集可比），rb4 仍跑
+- 14 次 tool_invocations（3 集：read_batch_summary + list_runs_in_batch + 4x3 read_artifact）
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 410 pytest（391 + 17 batch engine + 2 cli），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留（--write-report 政策 + is_inside_repo）。
+- harness batch_continuity full replay：review-batch full + tool_invocations non-empty + 每条 finding 有 evidence。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 review-batch**（重点看 4 规则语义 / graceful / redact / read-only / harness full 断言 / 三件套对齐）。
+- **Phase 3 P2 扩展 diagnose 规则**（continuity audit：角色/场景/道具漂移）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
 ## 当前状态（2026-07-14 - Phase 3 P2 review-run Codex 第四轮复审通过，可提交）
 
 Codex 第四轮复审 verdict 可以提交。顺手修了 `review.py:250` 顶部注释的 round2 旧语义。三轮 P2 演进收口（方向 E 终态）。

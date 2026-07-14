@@ -2,6 +2,40 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - review-batch 完整实现)
+
+Phase 3 P2 review-batch 从 stub 升级为完整实现（方向 B：cross-episode 一致性检查）。范围由用户拍板：只做 batch 级 cross-episode 规则，不汇总 review-run 报告，不重复 per-run rv1-rv4。stale cleanup 单独 commit（872f3b4）。
+
+### 实现
+
+- `planner/agent/review.py` 加 `ReviewBatchReport` model + `review_batch_dir()` engine + 4 cross-episode 规则：
+  - rb1 `rb1_character_id_inconsistent_across_episodes` (warning)：同 character id 跨集 name 不一致（漂移）
+  - rb2 `rb2_location_id_inconsistent_across_episodes` (warning)：同 location id 跨集 name 漂移
+  - rb3 `rb3_prop_id_inconsistent_across_episodes` (warning)：同 prop id 跨集 name 漂移
+  - rb4 `rb4_orphan_shot_reference` (warning)：shot 的 location_id/character_ids/prop_ids 不在本集 bible
+- graceful degradation（missing/corrupted/non-dict batch_summary -> error；per-episode artifact 缺失 -> warning + 跳过依赖规则）
+- redact 出口（`_add_finding` 统一 `_safe_text`，复用 review-run helper）
+- 不委托 validate_run；不重复 per-run rv1-rv4；read-only
+- CLI `review_batch_cmd` 从 stub 升级为 full（加 `--expected-env`/`--format`/`--verbose`，镜像 review_run_cmd）
+- 单集 batch：rb1-rb3 跳过（<2 集无跨集可比），rb4 仍跑
+- `harness/agent_scenarios/run_all.py` batch_continuity 从 stub 断言改为 full 断言（implementation_status=full + 非空 tool_invocations + 每条 finding 有 evidence），与 review-run 共享 full 分支
+
+### stale cleanup（独立 commit 872f3b4）
+
+- `PROJECT_STATUS.json` next_actions 删除 stale `phase0_git_push_to_github_blocked_on_user_url`（GitHub 已 push 完成）。
+
+### 验证
+
+- `python3 -m pytest` -- 410 passed（391 + 17 batch engine + 2 cli），2 warnings，零回归。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过，batch_continuity full replay。
+- `planner agent review-batch <samples/v1 batch>` -- 检出真实 rb3 prop name 漂移（blue_contract_folder EP01="蓝色合同文件夹" vs EP02="blue_contract_folder"）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留。
+
 ## 2026-07-14 (Proma Phase 3 P2 - review-run Codex 第四轮复审通过 + 注释补齐)
 
 Codex 第四轮复审 verdict **可以提交**：P1/P2/P3 阻断项全部收口。唯一 P3 非阻断：`review.py:250` 顶部 header 注释仍写 round2 旧语义（extra 段 ignored），与方向 E 实现不一致。本轮顺手改注释。

@@ -62,6 +62,22 @@ def _make_prod_simulated_run(tmp_path: Path, source_dev_run: Path) -> Path:
     return target
 
 
+def _make_batch(tmp_path: Path) -> Path:
+    """Produce a dev batch via the real planner CLI; return its path."""
+    out = tmp_path / "dev_batch"
+    rc, _, err = _run_cli(
+        "batch",
+        "--env",
+        "development",
+        "--scripts",
+        "samples/v1",
+        "--out",
+        str(out),
+    )
+    assert rc == 0, f"batch failed: {err[-500:]}"
+    return out
+
+
 # ---------- diagnose ----------
 
 
@@ -221,14 +237,42 @@ def test_cli_review_run_missing_dir_exits_2(tmp_path: Path) -> None:
     assert "does not exist" in err.lower() or "no such" in err.lower()
 
 
-def test_cli_review_batch_stub_returns_not_implemented_exit_zero(tmp_path: Path) -> None:
+def test_cli_review_batch_full_on_real_batch(tmp_path: Path) -> None:
+    batch_dir = _make_batch(tmp_path)
+    rc, out, err = _run_cli("agent", "review-batch", str(batch_dir))
+    assert rc in (0, 1), f"rc={rc}; stderr: {err[-500:]}"
+    assert "Traceback" not in err
+    data = json.loads(out)
+    assert data["implementation_status"] == "full"
+    assert data["tool_invocations"] != []
+    # real samples/v1 batch has 3 episodes
+    assert data["counts"]["episodes"] == 3
+
+
+def test_cli_review_batch_missing_batch_summary_exits_1(tmp_path: Path) -> None:
+    # a run dir (not a batch) -> missing batch_summary -> error -> rc=1
     run_dir = _make_dev_run(tmp_path)
     rc, out, err = _run_cli("agent", "review-batch", str(run_dir))
-    assert rc == 0, f"stderr: {err[-500:]}"
-    data = json.loads(out)
-    assert data["implementation_status"] == "not_implemented"
-    assert data["tool_invocations"] == []
+    assert rc == 1, f"expected rc=1, got rc={rc}; stderr: {err[-500:]}"
     assert "Traceback" not in err
+    data = json.loads(out)
+    assert data["status"] == "errors"
+    codes = [f["code"] for f in data["findings"]]
+    assert "missing_batch_summary" in codes
+
+
+def test_cli_review_batch_corrupted_no_traceback(tmp_path: Path) -> None:
+    """P1 guard mirror: a non-dict batch_summary must not leak a traceback."""
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    (batch / "batch_summary.json").write_text("[1, 2, 3]", encoding="utf-8")
+    rc, out, err = _run_cli("agent", "review-batch", str(batch))
+    assert rc == 1, f"rc={rc}; stderr: {err[-500:]}"
+    assert "Traceback" not in err
+    assert "AttributeError" not in err
+    data = json.loads(out)
+    codes = [f["code"] for f in data["findings"]]
+    assert "corrupted_batch_summary" in codes
 
 
 def test_cli_review_run_corrupted_artifact_no_traceback(tmp_path: Path) -> None:

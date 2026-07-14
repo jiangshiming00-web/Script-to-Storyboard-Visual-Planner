@@ -1,11 +1,10 @@
 """Click subcommands for the planner product agent.
 
 Phase 3 P1 ships ``diagnose`` (fully implemented). Phase 3 P2
-promotes ``review-run`` from stub to a fully implemented
-prompt-bible consistency review. ``review-batch`` remains a stub
-that returns a ``DiagnoseReport`` with
-``implementation_status="not_implemented"`` so a future
-implementation can plug in without breaking the public surface.
+promotes ``review-run`` (single-run prompt-bible consistency) and
+``review-batch`` (cross-episode character / location / prop id
+consistency + orphan shot references) from stubs to fully
+implemented read-only reviews.
 
 Hard rules enforced here:
 
@@ -17,12 +16,9 @@ Hard rules enforced here:
   ``planner.cli.run_cmd`` for ``--out``).
 * All errors flow through ``PlannerError``; never leak a Python
   traceback to the user (mirrors ``planner.cli.run_cmd``). The
-  review-run engine additionally guards against legitimate-JSON /
-  wrong-shape artifacts so a non-dict top level degrades to a
-  finding instead of an ``AttributeError`` traceback.
-* The ``review-batch`` stub exits ``0`` even though it does no
-  work - the ``implementation_status`` field is the canonical
-  signal.
+  review-run and review-batch engines additionally guard against
+  legitimate-JSON / wrong-shape artifacts so a non-dict top level
+  degrades to a finding instead of an ``AttributeError`` traceback.
 """
 
 from __future__ import annotations
@@ -354,53 +350,86 @@ def review_run_cmd(
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
+    "--expected-env",
+    type=click.Choice(["development", "production"]),
+    default=None,
+    help=(
+        "If given, review checks batch_summary.env against this value "
+        "and emits an env_mismatch finding when they differ."
+    ),
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["json", "markdown"]),
+    default="json",
+    help="Output format (default: json).",
+)
+@click.option(
     "--write-report",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Write the placeholder report to this path.",
+    help=(
+        "Write the report to this path. Default: stdout. Production "
+        "runs refuse to write inside the project repo."
+    ),
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Also emit the Chinese summary on stderr.",
 )
 @click.pass_context
 def review_batch_cmd(
     ctx: click.Context,
     batch_dir: Path,
+    expected_env: Optional[str],
+    fmt: str,
     write_report: Optional[Path],
+    verbose: bool,
 ) -> None:
-    """[Phase 3 P1 STUB] Cross-episode continuity review of a batch.
+    """Cross-episode continuity review of a batch (read-only).
 
-    This command is a placeholder. It returns a DiagnoseReport with
-    ``implementation_status="not_implemented"`` and does NOT touch
-    the batch directory. Use ``planner agent diagnose`` on each
-    episode run-dir for actual diagnostics.
+    BATCH_DIR is the path produced by ``planner batch`` (a directory
+    containing ``batch_summary.json`` and per-episode subdirectories).
+    Checks character / location / prop id consistency across episodes
+    + orphan shot references, and emits a ReviewBatchReport. Does NOT
+    write batch artifacts, does NOT merge bibles, does NOT re-run
+    per-run rv1-rv4 rules (use ``planner agent review-run`` per
+    episode for prompt-bible checks).
     """
-    from planner.agent.diagnose import build_not_implemented_report
+    from planner.agent.review import review_batch_dir
 
     project_root = _resolve_project_root(ctx)
-    report = build_not_implemented_report(
-        kind="review-batch", target=str(batch_dir)
-    )
+    try:
+        report = review_batch_dir(batch_dir, expected_env=expected_env)
+    except PlannerError as exc:
+        click.echo(click.style(f"agent error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+    except OSError as exc:
+        click.echo(click.style(f"agent error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
     report_dict = report.model_dump(mode="json")
 
     if write_report is not None:
         _check_and_write_report(report_dict, write_report, project_root)
 
-    _echo_json(report_dict)
-    click.echo(
-        click.style(
-            "\nNOTE: planner agent review-batch 尚未在 Phase 3 P1 实现；"
-            "如需跨集诊断请用 `planner agent diagnose <episode-run-dir>` 逐集跑。",
-            fg="yellow",
-        ),
-        err=True,
-    )
-    click.echo(
-        click.style(
-            "INFO: stub report env defaults to 'production' for "
-            "--write-report policy transparency; override by editing "
-            "the JSON if needed.",
-            fg="cyan",
-        ),
-        err=True,
-    )
+    if fmt == "json":
+        _echo_json(report_dict)
+    else:
+        _render_markdown(report_dict, title="Review Batch Report")
+
+    if verbose or fmt == "markdown":
+        click.echo(click.style("\n摘要：", fg="cyan"), err=True)
+        click.echo(report.summary, err=True)
+
+    # errors -> 1, else 0. Policy refusal is rc=2 inside
+    # _check_and_write_report and never reaches here.
+    if report.status == "errors":
+        sys.exit(1)
     sys.exit(0)
 
 
