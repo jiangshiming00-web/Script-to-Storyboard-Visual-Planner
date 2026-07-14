@@ -2,6 +2,37 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - review-run 完整实现)
+
+### Background
+
+Phase 3 P1.6 status cleanup 通过 Codex 第四轮复审后放行进入 Phase 3 P2。P2 从 `review-run` 完整实现起步（review-batch 继续留 stub）。双轮验证流程：Explore SubAgent 收集 planner/agent/ 结构 + harness 契约 + bibles/prompts 数据结构 + 红线；Plan SubAgent 独立设计验证（4 规则 + graceful + 不委托 validate_run + cross-episode 语义澄清）；主会话整合 + 独立判断（`_render_markdown` 用 title 参数而非 key 推断、graceful code 复用 diagnose）。
+
+### 实现
+
+- 新增 `planner/agent/review.py`：`ReviewRunReport` model + `review_run_dir()` engine + 4 规则（rv1 header-bible 双向比对 / rv2 video 字段 / rv3 placeholder error / rv4 shot_id 对齐）+ graceful degradation + redact 出口（`_add_finding` 统一 `_safe_text`）。
+- 修改 `planner/agent/cli.py`：`review_run_cmd` 从 stub 改为调 engine，加 `--expected-env`/`--format`/`--verbose`；`_render_markdown` 泛化（title 参数 + version 兼容 diagnose_version/review_version）。review-batch 仍 stub。
+- 修改 `harness/agent_scenarios/run_all.py`：review-run replay 从 stub 断言改为 full 断言（implementation_status=full + review_version=1.0 + 非空 tool_invocations + 每条 finding 有 evidence）。
+- 修改 `harness/agent_scenarios/review_prompt_refs.json`：checks 加 shot_id_alignment，assertions 加 review_version。
+- 新增 `tests/test_agent_review.py`（26 engine 测试）+ 修改 `tests/test_agent_cli.py`（+6 CLI 测试）。
+
+### cross-episode 语义
+
+review-run 是单 run 内 prompt-bible 一致性检查；cross-episode 留给 review-batch。PROJECT_STATUS 的 feature track 名含 "cross_episode" 是命名，不是 review-run 功能范围。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 379 pytest（347 + 26 review + 6 cli），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- production fail-closed + redact + read-only 全部保留。
+
+### 验证
+
+- `python3 -m pytest` -- 379 passed, 2 warnings。
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过（review-run full replay）。
+- review-run smoke 对真 dev run：status=ok, impl=full, 8 tool calls, 0 findings, counts 正确。
+
 ## 2026-07-14 (Proma Phase 3 P1.6 status cleanup round 3 - Codex 手工复审第三轮 4 findings 收口)
 
 ### Background

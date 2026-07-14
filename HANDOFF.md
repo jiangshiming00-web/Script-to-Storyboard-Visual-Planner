@@ -1,5 +1,44 @@
 # Handoff
 
+## 当前状态（2026-07-14 - Phase 3 P2 review-run 完工）
+
+Phase 3 P2 第一步：`planner agent review-run` 从 stub 升级为完整实现。review-batch 仍 stub。双轮验证流程（Explore + Plan 子会话）产出 plan，审批后实施。
+
+### review-run 实现（`planner/agent/review.py`）
+
+- `ReviewRunReport` model（复用 diagnose 子模型，`review_version: Literal["1.0"]`，无 provider/validation 字段）
+- `review_run_dir()` engine + 4 规则：
+  - rv1 `image_prompt_bible_ref_mismatch` (warning)：解析 prompt header `场景：/人物：/道具：` + 交叉比对 shot 的 bible ID 引用，双向（缺失 + 幻影）
+  - rv2 `video_prompt_missing_field` (warning)：motion/camera/avoid 非空
+  - rv3 `unresolved_placeholder` (error)：`{word}`/`<WORD>`/`[[TBD]]` 占位符
+  - rv4 `shot_id_misaligned` (warning)：shot_list/image_prompts/video_prompts shot_id 集合比对
+- graceful degradation（missing/corrupted run_summary -> error；artifact 缺失/损坏 -> warning + 跳过依赖规则）
+- redact 出口（`_add_finding` 统一走 `_safe_text`）
+- 不委托 validate_run（完全独立；scenario 不含 validate_run；fail-fast 与 graceful 冲突）
+- CLI 加 `--expected-env`/`--format`/`--verbose` 对齐 diagnose；`_render_markdown` 泛化（title 参数 + version 兼容）
+- 8 次 tool_invocations（read_run_summary + list_artifacts + read_artifact x6）
+
+### cross-episode 语义
+
+review-run 是单 run 内 prompt-bible 一致性检查；cross-episode 留给 review-batch（其 docstring 明确 "Cross-episode continuity review of a batch"）。PROJECT_STATUS 的 `phase3_p2_review_run_implementation_cross_episode_prompt_consistency` 是 feature track 名，不是 review-run 功能范围。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 379 pytest = 271 baseline + 107 agent + 1 boundaries，**零回归**。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed contract 保留（--write-report 政策 + is_inside_repo）。
+- API key 永不写盘：redact 覆盖所有 finding message。
+- review-run read-only：不写 run 产物。
+- review-batch 仍 stub（build_not_implemented_report 不动）。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 review-run**（重点看 4 规则正确性 / header 解析鲁棒性 / redact 出口 / graceful / harness replay full 断言 / 三件套对齐）。
+- **Phase 3 P2 review-batch 完整实现**（bible merge across episodes，cross-episode 一致性）。
+- **Phase 0 git push to GitHub**（blocked on user URL）。
+- **opt-in probe** + Phase Core-3 跨集连续性 + pkg/CI 路线。
+
 ## 当前状态（2026-07-14 - Phase 0 + Phase 3 P1/P1.5/P1.6 完工 + status cleanup 收口）
 
 按 `docs/PROMA_V1_REVIEW_AGENT_HARNESS_PLAN.md` 第三部分（产品内 agent read-only / guided）首次落地，配套 Phase 0 (git init + baseline)。**用户已批准的边界（9 条）全部守住**：不接 LLM / 不接 executor / 不增加必需 SDK / 不静默放宽红线 / 不写仓内产物（production）/ 不保存 API key / 不执行任意 shell / 不接 GUI RunRegistry / review-run + review-batch 留 stub。Phase 3 P1 骨架 + P1.5（4 findings）/ P1.6（5 findings + status cleanup）三轮 Codex 手工复审均已通过；347 pytest 全绿。

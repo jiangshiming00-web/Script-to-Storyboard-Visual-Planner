@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-14",
-  "phase": "v10_phase3_p1_product_agent_skeleton_read_only_complete",
-  "status": "v10_phase3_p1_product_agent_skeleton_read_only_complete_with_p1_6_provider_runtime_redact_and_status_cleanup_round3_next_actions_and_test_counts_synced",
+  "phase": "v10_phase3_p2_review_run_complete",
+  "status": "v10_phase3_p1_complete_p2_review_run_landed",
   "owner_plan": {
     "codex": ["architecture_design", "schema_audit", "review", "handoff_docs"],
     "proma": ["implementation", "tests", "bugfixes"],
@@ -116,7 +116,8 @@
     "proma_v10_pytest_247_passed_after_p3_polish",
     "phase3_p1_product_agent_skeleton_landed_6_files_13_rules_3_click_subcommands",
     "phase3_p1_5_and_p1_6_codex_manual_review_two_rounds_9_findings_fixed",
-    "phase3_p1_6_status_cleanup_round3_next_actions_pruned_and_test_counts_synced"
+    "phase3_p1_6_status_cleanup_round3_next_actions_pruned_and_test_counts_synced",
+    "phase3_p2_review_run_landed_4_rules_rv1_rv2_rv3_rv4_full_implementation"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -196,10 +197,8 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_review_run_implementation_cross_episode_prompt_consistency",
     "phase3_p2_review_batch_implementation_bible_merge_across_episodes",
     "phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift",
-    "phase3_p2_add_agent_scenario_review_prompt_refs_implementation_covers",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "phase0_git_push_to_github_blocked_on_user_url",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
@@ -240,14 +239,15 @@
     "git_baseline_commit": "91b3d2a (Phase 0 baseline v1.0 + Phase 2 Harness Engineering, 112 tracked files)",
     "planner_agent_module": {
       "package_root": "planner/agent/",
-      "layout": "flat 6 files, no sub-packages",
+      "layout": "flat 7 files, no sub-packages",
       "modules": [
         "planner/agent/__init__.py (public exports: diagnose_run_dir + build_not_implemented_report + Pydantic models + TOOL_REGISTRY)",
         "planner/agent/cli.py (Click group 'agent' with diagnose / review-run / review-batch; _check_and_write_report policy)",
         "planner/agent/redact.py (4 regex: Bearer + sk- + sk-ant- + gho_; ordered anthropic-before-openai)",
         "planner/agent/readers.py (load_run_summary / load_artifact / list_artifacts / load_batch_summary / list_runs_in_batch; graceful degradation)",
         "planner/agent/diagnose.py (Pydantic models + 13 rules + Chinese summary builder + graceful entry)",
-        "planner/agent/tools.py (6 read-only tool functions + TOOL_REGISTRY + TOOL_ARTIFACT_MAP mirroring harness)"
+        "planner/agent/tools.py (6 read-only tool functions + TOOL_REGISTRY + TOOL_ARTIFACT_MAP mirroring harness)",
+        "planner/agent/review.py (ReviewRunReport + review_run_dir engine + 4 rules rv1-rv4 + graceful + redact; Phase 3 P2)"
       ],
       "diagnostic_rules": [
         "R1 production_fallback_used (delegated to validate_run)",
@@ -269,7 +269,8 @@
         "tests/test_agent_readers.py (13 tests for graceful loads + size cap)",
         "tests/test_agent_tools.py (9 tests for registry alignment + delegation + TOOL_ARTIFACT_MAP sync)",
         "tests/test_agent_diagnose.py (29 tests for 13 rules + status derivation + stub + 5 redact exit surfaces + substring routing)",
-        "tests/test_agent_cli.py (7 subprocess tests for exit codes + policy refusal)"
+        "tests/test_agent_cli.py (13 subprocess tests: diagnose 7 + review-run 6)",
+        "tests/test_agent_review.py (26 tests for 4 rules rv1-rv4 + graceful + status + tool_invocations + redact)"
       ],
       "hard_boundary": "planner/agent/ has no write paths except the explicit --write-report CLI option. --write-report goes through is_inside_repo and refuses production writes inside the repo (mirroring cli.run_cmd policy)."
     },
@@ -501,7 +502,8 @@
     "v10_phase3_p1_write_report_policy": "pass (production + inside repo = rc=2 + no file written; dev + inside repo = rc=0 + stderr yellow WARNING + file written; production + outside repo = rc=0 + file written; missing run_summary env defaults to production policy fail-closed)",
     "v10_phase3_p1_stub_commands": "pass (review-run + review-batch: rc=0; implementation_status=not_implemented; tool_invocations=[] (stub does NOT pretend to read anything); 1 info-level finding not_implemented_in_p1; stderr yellow NOTE)",
     "v10_phase3_p1_harness_3_new_scenarios": "pass (diagnose_fallback_used + diagnose_partial_run + diagnose_secret_redaction; 7 scenarios total; run_all.py validates shape + expected∩forbidden=∅ + approval-gate + live cross-check via real sample run/batch)",
-    "v10_phase3_p1_test_count": "pass (347 pytest after P1.6 status cleanup = 271 baseline + 17 test_agent_redact + 13 test_agent_readers + 9 test_agent_tools (incl. TOOL_ARTIFACT_MAP sync) + 29 test_agent_diagnose (incl. substring routing + stub env pin + 5 redact exit surfaces) + 7 test_agent_cli + 1 added test_boundaries; 0 regression on existing 271)",
+    "v10_phase3_p1_test_count": "pass (379 pytest after P2 review-run = 271 baseline + 17 redact + 13 readers + 9 tools + 29 diagnose + 13 cli + 26 review + 1 boundaries; 0 regression)",
+    "v10_phase3_p2_review_run": "pass (ReviewRunReport + review_run_dir engine + 4 rules: rv1 image_prompt_bible_ref_mismatch warning header-bible bidirectional / rv2 video_prompt_missing_field warning / rv3 unresolved_placeholder error / rv4 shot_id_misaligned warning; graceful degradation; redact via _add_finding; 8 tool_invocations read_run_summary+list_artifacts+read_artifact x6; harness review-run replay full; 26 test_agent_review + 6 new test_agent_cli)",
     "v10_phase3_p1_cli_subprocess_smoke": "pass (--help shows agent + 3 subcommands; diagnose dev run = exit 0 + JSON to stdout; missing dir = exit 2 + no Traceback in stderr; --write-report /tmp = exit 0 + file 1662 bytes; dev + repo-internal --write-report = exit 0 + WARNING + file; production + repo-internal --write-report = exit 2 + no file; stubs rc=0 + not_implemented)",
     "v10_phase2_no_arbitrary_shell": "pass (harness 自身 subprocess allowlist + agent scenario 显式 forbid execute_arbitrary_shell)",
     "v10_phase2_no_real_os_app_data_pollution": "pass (smoke_gui sets PLANNER_APP_DATA_ROOT + PLANNER_MODEL_CONFIG_PATH; smoke_cli passes --model-config explicit deterministic; smoke_install creates fresh venv; repo runs/ only contains .gitkeep after the rework run)",
