@@ -55,7 +55,7 @@ from .diagnose import (
     ToolInvocation,
 )
 from .redact import redact_secrets_text
-from .readers import load_batch_summary, list_runs_in_batch
+from .readers import load_batch_summary
 from .tools import list_artifacts as _tools_list_artifacts, read_artifact, read_run_summary
 
 # ---------- Pydantic model ----------
@@ -959,8 +959,13 @@ def _build_batch_summary_zh(report: ReviewBatchReport) -> str:
         )
     env_label = report.env or "未知"
     bid = report.batch_id or "?"
-    eps = report.counts.get("episodes", 0)
-    lines: List[str] = [f"batch {bid}（env={env_label}，共 {eps} 集）。"]
+    eps_total = report.counts.get("episodes_total", report.counts.get("episodes", 0))
+    eps_reviewed = report.counts.get("episodes_reviewed", 0)
+    eps_skipped = report.counts.get("episodes_skipped", 0)
+    lines: List[str] = [
+        f"batch {bid}（env={env_label}，batch_summary 共 {eps_total} 集；"
+        f"review {eps_reviewed} 集，跳过 {eps_skipped} 集）。"
+    ]
     n_err = sum(1 for f in report.findings if f.severity == "error")
     n_warn = sum(1 for f in report.findings if f.severity == "warning")
     findings_summary: List[str] = []
@@ -987,6 +992,14 @@ def review_batch_dir(
     corrupted ``batch_summary.json`` -> error + minimal report; an
     episode with a missing / corrupted artifact is skipped for
     dependent rules (warning finding recorded via _read_artifact_safe).
+
+    **Batch membership** (P2 Codex review fix): the canonical list of
+    episodes comes from ``batch_summary.json::episodes[]``, NOT from
+    a directory scan. Stale subdirectories (e.g. ``OLD_EP99`` left
+    over from a previous batch run) are ignored. Episodes whose
+    ``status`` is not ``"done"`` or whose ``run_dir`` does not exist
+    get a ``batch_episode_not_reviewable`` warning and are excluded
+    from cross-episode rules.
 
     Reads each episode's ``character_bible`` / ``location_bible`` /
     ``prop_bible`` / ``shot_list`` and runs 4 rules:
@@ -1056,31 +1069,107 @@ def review_batch_dir(
             [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.env")],
         )
 
-    # ----- Step 1: list_runs_in_batch -----
-    run_dirs = list_runs_in_batch(batch_dir)
-    report.tool_invocations.append(
-        ToolInvocation(tool="list_runs_in_batch", ok=True, artifact_refs=["batch_summary.json"], bytes_read=0)
-    )
-    if not run_dirs:
+    # ----- Step 1: enumerate episodes from batch_summary.episodes[] -----
+    # Authoritative membership: a directory scan (``list_runs_in_batch``)
+    # is no longer the source of truth because (a) stale subdirs from
+    # earlier batch runs (e.g. ``OLD_EP99``) would be wrongly included
+    # and (b) episodes recorded as ``status!="done"`` (or with a
+    # missing run_dir) silently drop out of the report, making the
+    # review summary disagree with batch_summary.totals.
+    ep_meta_list = summary.get("episodes")
+    if not isinstance(ep_meta_list, list):
+        ep_meta_list = []
+        _add_finding(
+            report.findings,
+            "error",
+            "corrupted_batch_summary",
+            "batch_summary.json 的 episodes[] 字段缺失或不是列表；"
+            "agent 无法枚举本次 batch 的 episodes。",
+            [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.episodes")],
+        )
+        report.counts = {"episodes": 0, "episodes_total": 0, "episodes_reviewed": 0, "episodes_skipped": 0, "findings": len(report.findings)}
+        report.summary = _build_batch_summary_zh(report)
+        return report.derive_status()
+
+    episodes_total = len(ep_meta_list)
+
+    if episodes_total == 0:
         _add_finding(
             report.findings,
             "warning",
             "batch_no_reviewable_episodes",
-            "batch 目录下没有含 run_summary.json 的 episode 子目录；无法做跨集检查。",
+            "batch_summary.episodes[] 为空；无法做跨集检查。",
             [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.episodes")],
         )
-        report.counts = {"episodes": 0, "episodes_reviewed": 0, "findings": len(report.findings)}
+        report.counts = {
+            "episodes": 0,
+            "episodes_total": 0,
+            "episodes_reviewed": 0,
+            "episodes_skipped": 0,
+            "findings": len(report.findings),
+        }
         report.summary = _build_batch_summary_zh(report)
         return report.derive_status()
 
-    # ----- Step 2: per-episode read 4 artifacts (graceful via _read_artifact_safe) -----
-    episodes: List[tuple] = []  # (run_dir, episode_id, arts)
-    for rd in run_dirs:
-        ep_id = rd.name
+    # ----- Step 2: per-episode membership gate (status==done + run_dir exists) -----
+    # Episodes that fail either gate get a batch-level warning and are
+    # excluded from cross-episode rules. This is the membership contract:
+    # whatever batch_summary.json says is what gets reviewed.
+    episodes: List[tuple] = []  # (run_dir, episode_id, arts) for episodes that passed the gate
+    episodes_skipped = 0
+    for meta in ep_meta_list:
+        if not isinstance(meta, dict):
+            episodes_skipped += 1
+            _add_finding(
+                report.findings,
+                "warning",
+                "batch_episode_not_reviewable",
+                "batch_summary.episodes[] 含非 dict 项；该 episode 已被跳过。",
+                [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator="$.episodes")],
+            )
+            continue
+        ep_id = meta.get("episode_id")
+        run_dir_str = meta.get("run_dir")
+        ep_status = meta.get("status")
+        if not isinstance(ep_id, str) or not isinstance(run_dir_str, str):
+            episodes_skipped += 1
+            _add_finding(
+                report.findings,
+                "warning",
+                "batch_episode_not_reviewable",
+                f"episode meta 缺少 episode_id 或 run_dir（{meta!r}）；已跳过。",
+                [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator=f"$.episodes[?(@.episode_id=={ep_id!r})]")],
+            )
+            continue
+        if ep_status != "done":
+            episodes_skipped += 1
+            _add_finding(
+                report.findings,
+                "warning",
+                "batch_episode_not_reviewable",
+                f"episode {ep_id!r} status={ep_status!r} 不是 done；已被跳过 review。",
+                [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator=f"$.episodes[?(@.episode_id=={ep_id!r})].status")],
+            )
+            continue
+        run_dir = Path(run_dir_str)
+        if not run_dir.is_dir():
+            episodes_skipped += 1
+            _add_finding(
+                report.findings,
+                "warning",
+                "batch_episode_not_reviewable",
+                f"episode {ep_id!r} 的 run_dir {run_dir_str!r} 不存在或不是目录；已被跳过 review。",
+                [EvidenceRef(artifact="batch_summary.json", path=str(bs_path), locator=f"$.episodes[?(@.episode_id=={ep_id!r})].run_dir")],
+            )
+            continue
+        # Passed the gate: read the 4 review artifacts (graceful via
+        # _read_artifact_safe). Note we deliberately do NOT use the
+        # directory name as episode id - we honor the episode_id
+        # recorded in batch_summary.json.
         arts: Dict[str, Optional[Dict[str, Any]]] = {}
         for name in _BATCH_REVIEW_ARTIFACTS:
-            arts[name] = _read_artifact_safe(rd, name, report.findings, report.tool_invocations)
-        episodes.append((rd, ep_id, arts))
+            arts[name] = _read_artifact_safe(run_dir, name, report.findings, report.tool_invocations)
+        episodes.append((run_dir, ep_id, arts))
 
     # ----- Step 3: rules -----
     # rb1-rb3 cross-episode consistency (need >=2 fully-reviewable episodes)
@@ -1102,9 +1191,19 @@ def review_batch_dir(
             _rule_rb4_orphan_shot_reference(rd, ep, arts, report.findings)
 
     # ----- Step 4: counts + summary + derive_status -----
+    # counts shape:
+    #   episodes_total   = len(batch_summary.episodes) (authoritative batch size)
+    #   episodes         = back-compat alias for episodes_total
+    #   episodes_reviewed = episodes that passed the membership gate
+    #                       (status=done + run_dir exists) AND had their
+    #                       4 artifacts read (may have partial artifacts)
+    #   episodes_skipped = total - reviewed (status!=done / missing run_dir
+    #                       / malformed meta)
     report.counts = {
-        "episodes": len(run_dirs),
-        "episodes_reviewed": len(reviewable),
+        "episodes": episodes_total,
+        "episodes_total": episodes_total,
+        "episodes_reviewed": len(episodes),
+        "episodes_skipped": episodes_skipped,
         "findings": len(report.findings),
     }
     report.summary = _build_batch_summary_zh(report)

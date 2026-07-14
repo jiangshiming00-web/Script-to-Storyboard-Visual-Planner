@@ -2,6 +2,72 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-14 (Proma Phase 3 P2 - review-batch Codex 手工 round-2 复审修复 P2 + P3)
+
+Codex 手工对手方对 review-batch 完整实现（commit 含 `phase3_p2_review_batch_codex_review_subsession_fixes_applied`）做 round-2 复审。verdict **暂不建议进入下一步**：实现主方向对，但有 1 个核心 P2 需要先修；另有几个 P3 stale 文档/状态项。本轮按"P2 必修 + P3 顺手补"全部修齐，等 Codex round-3 复审放行。
+
+### Findings → Fixes
+
+#### P2（核心）：review-batch 不应以目录扫描为权威清单
+
+**Bug**: `planner/agent/review.py::review_batch_dir` 第 1 步调 `list_runs_in_batch(batch_dir)` 扫描目录下所有含 `run_summary.json` 的子目录，然后用 `rd.name` 当 episode id。这意味着 batch 真实成员（`batch_summary.episodes[]`）和 review 报告脱钩：
+
+1. `batch_summary.episodes[]` 只含 EP01，但磁盘上残留 `OLD_EP99/run_summary.json`（之前 batch 跑过没清理），当前会把 OLD_EP99 纳入本次 review，并误报 `rb1` 跨集漂移。
+2. `batch_summary.episodes[]` 含 EP01 done + EP02 failed，但 EP02 没有 run dir 时，当前报告 `status=ok`、`counts.episodes_reviewed=1`、summary 写"共 1 集"，没有提示 EP02 未被 review。
+
+这两种情况都让 batch 级 review 结论与 batch_summary 脱钩，属于 review-batch 核心语义问题。
+
+**Fix**: `planner/agent/review.py` `review_batch_dir`：
+- 删 `from .readers import ... list_runs_in_batch` import + 第 1 步 `run_dirs = list_runs_in_batch(batch_dir)` 扫描 + `report.tool_invocations.append(... "list_runs_in_batch" ...)`。
+- Step 1 改为读 `summary.get("episodes")` 作权威清单（malformed → `corrupted_batch_summary` error + 最小报告）。
+- Step 2 加 membership gate：每条 episode meta 逐项检查（dict 形态 → episode_id/run_dir 字符串 → status == "done" → run_dir 是目录）。任何失败项发 `batch_episode_not_reviewable` warning + `episodes_skipped += 1`，**不**进入 reviewable 集合。
+- 保留"episode_id 来自 batch_summary.json"语义（不再用目录名当 episode id）。
+- counts 区分 `episodes_total` / `episodes_reviewed` / `episodes_skipped`；`episodes` 字段保留作 back-compat alias（= `episodes_total`）。
+- `_build_batch_summary_zh` 用新 counts 字段，反映"batch_summary 共 N 集；review R 集，跳过 S 集"。
+- 文档 docstring 加段说明 batch membership 语义（"stale subdirs ignored; status!=done or missing run_dir get batch_episode_not_reviewable warning"）。
+
+#### P3（顺手补 #1）：入口文档仍写 review-batch 是 stub
+
+**Bug**: `planner/agent/__init__.py:9-13` 写"review-batch remains a stub"；`planner/agent/cli.py::agent_group` docstring 写"diagnose + review-run + stub"。
+
+**Fix**: 两处 docstring 改为反映 review-run（full）+ review-batch（full，Phase 3 P2 review-batch 含 cross-episode id consistency + orphan shot references）。
+
+#### P3（顺手补 #2）：PROJECT_STATUS 测试拆分数字过时
+
+**Bug**: `PROJECT_STATUS.json:300` 写 `test_agent_cli.py 17`，实际 19；line 301 写 `test_agent_review.py 53`，实际 55（修前）；`v10_phase3_p2_review_batch_pytest` 写 `414 passed (391 baseline + 19 batch engine tests incl 2 P2 regression + 4 cli)` 拆分也与 `test_agent_review.py:712` 的 `2 + 8 = 10` tool_invocations 数对不上（老实现含 `list_runs_in_batch` 那 1 调）。`v10_phase3_p1_test_count` `13 cli` 也是 stale。
+
+**Fix**:
+- line 300 → `19 subprocess tests: diagnose 5 + review-run 9 + review-batch 3 + 2 Codex P1 traceback-guard regression`。
+- line 301 → `58 tests`（55 + 3 新增 round-2 regression），描述补"3 new Codex round-2 batch membership regressions: stale subdir / failed-status / missing-run_dir"。
+- line 548 `v10_phase3_p1_test_count` 历史快照保留（旧 commit 数字，desc 已够清楚）。
+- line 567 → `417 passed (391 baseline + 22 batch engine tests incl 2 P2-1/P2-2 regression + 3 new Codex round-2 batch membership regression + 4 cli; 0 regression)`。
+- `phase` 推到 `v10_phase3_p2_review_batch_codex_round2_batch_membership_fixed`；`status` 推到 `v10_phase3_p2_review_batch_codex_round2_p2_p3_fixed_awaiting_codex_manual_round2_re_review`；`completed_steps` 补 `phase3_p2_review_batch_codex_round2_batch_membership_fixed`；`next_actions[0]` 加 `phase3_p2_review_batch_codex_manual_round2_re_review_pending`；`verification` 加 3 行 round-2 锚点（`..._codex_round2` / `..._codex_round2_pytest` / `..._codex_round2_scenarios`）。
+
+#### 测试夹具修复
+
+**Bug**: `tests/test_agent_review.py::test_batch_tool_invocations_recorded` 期望 `len(tool_invocations) == 10`（read_batch_summary + list_runs_in_batch + 2*4 read_artifact），新实现没有 `list_runs_in_batch` 那 1 调，应为 9。
+
+**Fix**: 注释更新为 "Codex P2 fix: review-batch no longer calls list_runs_in_batch — batch_summary.episodes[] is the authoritative membership source. read_batch_summary + 2 episodes x 4 read_artifact = 1 + 8 = 9"；断言改为 `9`；删 `assert "list_runs_in_batch" in tools`。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- 417 pytest（414 旧 + 3 新增 round-2 回归：stale-subdir / failed-status / missing-run_dir），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留。
+- harness `validate_live_cross_check` 只验证 `_TOOL_ARTIFACT_MAP` 里的 artifact 是否存在，不验证 `list_runs_in_batch` 实际被调过（"expected tool ≠ required call"）；`validate_live_agent_replay` 只要求 `tool_invocations` 非空 + 每条 finding 有 evidence。删 `list_runs_in_batch` 调用后 7 scenarios 全过，`batch_continuity` full replay 不变。
+
+### 验证
+
+- `python3 -m pytest` -- **417 passed, 2 warnings**；agent/boundary collect: `redact 17 + readers 13 + tools 9 + diagnose 29 + cli 19 + review 58 + boundaries 11`（合计 156）；其余为 baseline tests；零回归
+- `python3 harness/agent_scenarios/run_all.py` -- **ALL AGENT SCENARIO STEPS PASSED ✔**（7 scenarios；batch_continuity full replay：review-batch full + tool_invocations non-empty）
+- `python3 -m json.tool PROJECT_STATUS.json` -- 通过
+- `runs/` -- 仅含 `.gitkeep`
+- 3 个新增回归测试钉住行为：
+  - `test_review_batch_ignores_stale_subdir_not_in_batch_summary` — 磁盘残留 OLD_EP99 但 batch_summary 不含 → counts=1/1/0，无 rb1 漂移误报，blob 不含 OLD_EP99 内容
+  - `test_review_batch_warns_and_skips_when_episode_status_failed` — EP01 done + EP02 failed → counts=2/1/1，emit `batch_episode_not_reviewable` warning（message 含 "EP02" + "failed"），EP02 林夏2 不触发 rb1
+  - `test_review_batch_warns_and_skips_when_run_dir_missing` — EP01 done + EP02 done 但 run_dir 不存在 → counts=2/1/1，warning 含 "EP02" + "不存在"
+
 ## 2026-07-14 (Proma Phase 3 P2 - review-batch review 子会话复审修复)
 
 Proma 派 review 子会话（扮演 Codex-style 角色，delegation 5693ecef）对 review-batch 完整实现做对抗式独立审查，verdict NEEDS_FIX，5 findings，本轮修齐 P2 + P3。

@@ -153,7 +153,7 @@ def _render_markdown(
 @click.group("agent")
 @click.pass_context
 def agent_group(ctx: click.Context) -> None:
-    """Planner product agent (read-only diagnose + review-run + stub).
+    """Planner product agent (read-only diagnose + review-run + review-batch).
 
     The agent is read-only by default; it never writes files unless
     ``--write-report PATH`` is given explicitly. In production

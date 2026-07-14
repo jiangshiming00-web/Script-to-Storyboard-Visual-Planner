@@ -7,12 +7,13 @@ on the CLI). It does **not** call any LLM, does not execute any
 shell command, and does not save API keys.
 
 Phase 3 P1 exposes ``planner agent diagnose`` (fully implemented).
-Phase 3 P2 promotes ``planner agent review-run`` from stub to a
-fully implemented prompt-bible consistency review.
-``planner agent review-batch`` remains a stub. The contracts for
-all three are encoded in :mod:`planner.agent.diagnose` /
-:mod:`planner.agent.review` and the :mod:`planner.agent.tools`
-registry.
+Phase 3 P2 promotes ``planner agent review-run`` (single-run
+prompt-bible consistency) and ``planner agent review-batch``
+(cross-episode character / location / prop id consistency + orphan
+shot references) from stubs to fully implemented read-only reviews.
+The contracts for all three are encoded in
+:mod:`planner.agent.diagnose` / :mod:`planner.agent.review` and the
+:mod:`planner.agent.tools` registry.
 
 Public surface (use these from the CLI; do not import internals):
 

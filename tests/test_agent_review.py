@@ -710,15 +710,16 @@ def test_batch_status_ok_when_clean(tmp_path: Path) -> None:
 
 
 def test_batch_tool_invocations_recorded(tmp_path: Path) -> None:
-    # read_batch_summary + list_runs_in_batch + 2 episodes x 4 read_artifact = 2 + 8 = 10
+    # Codex P2 fix: review-batch no longer calls list_runs_in_batch —
+    # batch_summary.episodes[] is the authoritative membership source.
+    # read_batch_summary + 2 episodes x 4 read_artifact = 1 + 8 = 9
     ep1 = _full_episode()
     ep2 = _full_episode()
     batch = _make_batch_dir(tmp_path, episodes={"EP01": ep1, "EP02": ep2})
     report = review_batch_dir(batch)
-    assert len(report.tool_invocations) == 10
+    assert len(report.tool_invocations) == 9
     tools = [t.tool for t in report.tool_invocations]
     assert tools[0] == "read_batch_summary"
-    assert "list_runs_in_batch" in tools
     assert tools.count("read_artifact") == 8
 
 
@@ -762,3 +763,135 @@ def test_rb4_redact_secret_in_id_evidence_locator(tmp_path: Path) -> None:
     blob = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
     assert secret_id not in blob
     assert "<redacted>" in blob
+
+
+# ----- Codex Phase 3 P2 review-batch round-2 fixes -----
+# P2 (核心): review-batch 不再扫描 batch_dir 下所有含 run_summary.json
+# 的子目录；以 batch_summary.json::episodes[] 为权威清单。
+# P3 (顺手补): counts 区分 episodes_total / episodes_reviewed / episodes_skipped；
+# failed / missing run_dir / malformed meta 给 batch_episode_not_reviewable warning
+# 且 counts 不谎报；stale 子目录不参与 cross-episode / orphan 规则。
+
+
+def test_review_batch_ignores_stale_subdir_not_in_batch_summary(tmp_path: Path) -> None:
+    """Codex P2 修复回归：磁盘上残留的 OLD_EP99 子目录（含 run_summary.json
+    + 与 EP01 同名的角色但 name 不同）必须**不**进入 cross-episode 检查。
+    review 报告里 counts.episodes_total 必须等于 batch_summary.episodes 的
+    长度（1），episodes_reviewed 等于 1；OLD_EP99 的 char id 漂移不应被报。"""
+    ep1 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏"}]})
+    # stale 旧集：含 run_summary.json + char name 故意不同；老逻辑会误报 rb1 漂移。
+    old_ep = _full_episode(char={"characters": [{"id": "lin_xia", "name": "旧名_stale"}]})
+    episodes = {"EP01": ep1, "OLD_EP99": old_ep}
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    # 显式 batch_summary：只声明 EP01 done，OLD_EP99 不在 list 内
+    summary = {
+        "batch_id": "stale-test",
+        "env": "development",
+        "episodes": [
+            {"run_id": "EP01", "episode_id": "EP01", "run_dir": str(batch_dir / "EP01"), "status": "done"},
+        ],
+        "totals": {"episodes": 1, "done": 1},
+    }
+    for ep_id, arts in episodes.items():
+        ep_dir = batch_dir / ep_id
+        ep_dir.mkdir()
+        rs = arts.get("run_summary") or {"run_id": ep_id, "env": "development", "script": "x", "counts": {"shots": 1}}
+        (ep_dir / "run_summary.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        for name in ("character_bible", "location_bible", "prop_bible", "shot_list"):
+            if name in arts and arts[name] is not None:
+                (ep_dir / f"{name}.json").write_text(json.dumps(arts[name], ensure_ascii=False), encoding="utf-8")
+    (batch_dir / "batch_summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+
+    report = review_batch_dir(batch_dir)
+    codes = _batch_codes(report)
+    assert report.counts["episodes_total"] == 1
+    assert report.counts["episodes"] == 1  # back-compat alias
+    assert report.counts["episodes_reviewed"] == 1
+    assert report.counts["episodes_skipped"] == 0
+    # OLD_EP99 不应触发任何 finding
+    assert "rb1_character_id_inconsistent_across_episodes" not in codes
+    assert "rb1" not in " ".join(codes) or "rb1_character_id_inconsistent_across_episodes" not in codes
+    # 确认 summary 里没出现 OLD_EP99 的 name
+    blob = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert "旧名_stale" not in blob
+    assert report.status == "ok"
+
+
+def test_review_batch_warns_and_skips_when_episode_status_failed(tmp_path: Path) -> None:
+    """Codex P2 修复回归：batch_summary.episodes 含 1 done + 1 failed；
+    failed 集必须**不**被纳入 review，且必须 emit batch_episode_not_reviewable
+    warning，counts 真实反映 total=2 / reviewed=1 / skipped=1，不谎报。"""
+    ep1 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏"}]})
+    # EP02 failed，但其 run_dir 仍在盘上（且含完整 artifacts）
+    ep2 = _full_episode(char={"characters": [{"id": "lin_xia", "name": "林夏2"}]})
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    summary = {
+        "batch_id": "mixed-status-test",
+        "env": "development",
+        "episodes": [
+            {"run_id": "EP01", "episode_id": "EP01", "run_dir": str(batch_dir / "EP01"), "status": "done"},
+            {"run_id": "EP02", "episode_id": "EP02", "run_dir": str(batch_dir / "EP02"), "status": "failed"},
+        ],
+        "totals": {"episodes": 2, "done": 1, "failed": 1},
+    }
+    for ep_id, arts in [("EP01", ep1), ("EP02", ep2)]:
+        ep_dir = batch_dir / ep_id
+        ep_dir.mkdir()
+        rs = arts.get("run_summary") or {"run_id": ep_id, "env": "development", "script": "x", "counts": {"shots": 1}}
+        (ep_dir / "run_summary.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+        for name in ("character_bible", "location_bible", "prop_bible", "shot_list"):
+            if name in arts and arts[name] is not None:
+                (ep_dir / f"{name}.json").write_text(json.dumps(arts[name], ensure_ascii=False), encoding="utf-8")
+    (batch_dir / "batch_summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+
+    report = review_batch_dir(batch_dir)
+    codes = _batch_codes(report)
+    # counts 必须真实：total=2, reviewed=1, skipped=1（不谎报 reviewed=2）
+    assert report.counts["episodes_total"] == 2
+    assert report.counts["episodes_reviewed"] == 1
+    assert report.counts["episodes_skipped"] == 1
+    # batch_episode_not_reviewable warning 必出，message 含 EP02 + status=failed
+    assert "batch_episode_not_reviewable" in codes
+    skip_msgs = [f.message for f in report.findings if f.code == "batch_episode_not_reviewable"]
+    assert any("EP02" in m and "failed" in m for m in skip_msgs)
+    # EP02 的林夏2 vs EP01 的林夏 不应触发 rb1（因为 EP02 没进 reviewable）
+    assert "rb1_character_id_inconsistent_across_episodes" not in codes
+    # summary 提示：报告 review 1 集、跳过 1 集，不说"共 2 集 review 通过"
+    assert "跳过 1 集" in report.summary or "跳过 1" in report.summary
+
+
+def test_review_batch_warns_and_skips_when_run_dir_missing(tmp_path: Path) -> None:
+    """Codex P2 修复回归：batch_summary.episodes 含一个 run_dir 不存在的
+    done episode；review 必须跳过该集 + emit batch_episode_not_reviewable
+    warning（message 含 episode_id 和缺失的 path），counts 真实反映。"""
+    ep1 = _full_episode()
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+    summary = {
+        "batch_id": "missing-rundir-test",
+        "env": "development",
+        "episodes": [
+            {"run_id": "EP01", "episode_id": "EP01", "run_dir": str(batch_dir / "EP01"), "status": "done"},
+            {"run_id": "EP02", "episode_id": "EP02", "run_dir": str(batch_dir / "EP02_GONE"), "status": "done"},
+        ],
+        "totals": {"episodes": 2, "done": 2},
+    }
+    ep_dir = batch_dir / "EP01"
+    ep_dir.mkdir()
+    rs = {"run_id": "EP01", "env": "development", "script": "x", "counts": {"shots": 1}}
+    (ep_dir / "run_summary.json").write_text(json.dumps(rs, ensure_ascii=False), encoding="utf-8")
+    for name in ("character_bible", "location_bible", "prop_bible", "shot_list"):
+        (ep_dir / f"{name}.json").write_text(json.dumps(DEFAULT_CHAR_BIBLE if name == "character_bible" else DEFAULT_LOC_BIBLE if name == "location_bible" else DEFAULT_PROP_BIBLE if name == "prop_bible" else DEFAULT_SHOT_LIST, ensure_ascii=False), encoding="utf-8")
+    # 故意不创建 EP02_GONE 目录
+    (batch_dir / "batch_summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+
+    report = review_batch_dir(batch_dir)
+    codes = _batch_codes(report)
+    assert report.counts["episodes_total"] == 2
+    assert report.counts["episodes_reviewed"] == 1
+    assert report.counts["episodes_skipped"] == 1
+    assert "batch_episode_not_reviewable" in codes
+    skip_msgs = [f.message for f in report.findings if f.code == "batch_episode_not_reviewable"]
+    assert any("EP02" in m and ("不存在" in m or "不是目录" in m) for m in skip_msgs)
