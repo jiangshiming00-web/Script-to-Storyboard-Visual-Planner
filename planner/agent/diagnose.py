@@ -213,6 +213,48 @@ def _safe_text(value: Any) -> str:
     return redact_secrets_text(str(value))
 
 
+def _add_finding(
+    findings: List[DiagnoseFinding],
+    severity: Severity,
+    code: str,
+    message: str,
+    evidence: List[EvidenceRef],
+) -> None:
+    """Append a finding with message + evidence redacted via ``_safe_text``.
+
+    Centralizes the redact-on-exit contract so no diagnose rule can
+    forget to redact text copied from a corrupt / adversarial artifact
+    (bible ``id`` / ``name`` / prompt / ``locator``) before it reaches
+    the report JSON. Each :class:`EvidenceRef` ``artifact`` / ``path``
+    / ``locator`` is run through ``_safe_text`` in addition to the
+    message - defense in depth against the "secret-in-id leaks
+    through JSONPath locator" exit surfaced by the Codex manual review
+    of R14/R15/R16 (Phase 3 P2 continuity-audit).
+
+    Mirrors ``planner.agent.review._add_finding`` (Phase 3 P2 review-run
+    P2-2 fix); both copies MUST stay in sync with
+    :func:`redact_secrets_text`. We deliberately keep the helper
+    private to ``diagnose.py`` (rather than importing from review.py)
+    so the dependency surface stays flat and a future per-module
+    tweak does not cascade.
+    """
+    findings.append(
+        DiagnoseFinding(
+            severity=severity,
+            code=code,
+            message=_safe_text(message),
+            evidence=[
+                EvidenceRef(
+                    artifact=_safe_text(e.artifact),
+                    path=_safe_text(e.path),
+                    locator=_safe_text(e.locator),
+                )
+                for e in evidence
+            ],
+        )
+    )
+
+
 # ---------- Validation report translation (R1/R5/R6) ----------
 
 
@@ -697,23 +739,22 @@ def _check_bible_self_consistency(
         ]
         distinct_names = {n for n in names if n is not None}
         if len(distinct_names) > 1:
-            findings.append(
-                DiagnoseFinding(
-                    severity="warning",
-                    code=id_conflict_code,
-                    message=(
-                        f"{bible_name}.json 内部 id 冲突：id {cid!r} 在 entries[{indexes}]"
-                        f" 对应多个 name（{sorted(_safe_text(str(n)) for n in distinct_names)}）；"
-                        "同一 id 应只对应一个 name，请人工合并或修正。"
-                    ),
-                    evidence=[
-                        EvidenceRef(
-                            artifact=f"{bible_name}.json",
-                            path=str(run_dir / f"{bible_name}.json"),
-                            locator=f"$.{list_key}[?(@.id=={cid!r})]",
-                        )
-                    ],
-                )
+            _add_finding(
+                findings,
+                "warning",
+                id_conflict_code,
+                (
+                    f"{bible_name}.json 内部 id 冲突：id {cid!r} 在 entries[{indexes}]"
+                    f" 对应多个 name（{sorted(_safe_text(str(n)) for n in distinct_names)}）；"
+                    "同一 id 应只对应一个 name，请人工合并或修正。"
+                ),
+                [
+                    EvidenceRef(
+                        artifact=f"{bible_name}.json",
+                        path=str(run_dir / f"{bible_name}.json"),
+                        locator=f"$.{list_key}[?(@.id=={cid!r})]",
+                    )
+                ],
             )
 
     # ----- 2. name conflict -----
@@ -725,23 +766,22 @@ def _check_bible_self_consistency(
         ]
         distinct_ids = {i for i in ids if i is not None}
         if len(distinct_ids) > 1:
-            findings.append(
-                DiagnoseFinding(
-                    severity="warning",
-                    code=name_conflict_code,
-                    message=(
-                        f"{bible_name}.json 内部 name 冲突：name {cname!r} 在 entries[{indexes}]"
-                        f" 对应多个 id（{sorted(_safe_text(str(i)) for i in distinct_ids)}）；"
-                        "同一中文 name 应只对应一个 id，请人工合并或修正。"
-                    ),
-                    evidence=[
-                        EvidenceRef(
-                            artifact=f"{bible_name}.json",
-                            path=str(run_dir / f"{bible_name}.json"),
-                            locator=f"$.{list_key}[?(@.name=={cname!r})]",
-                        )
-                    ],
-                )
+            _add_finding(
+                findings,
+                "warning",
+                name_conflict_code,
+                (
+                    f"{bible_name}.json 内部 name 冲突：name {cname!r} 在 entries[{indexes}]"
+                    f" 对应多个 id（{sorted(_safe_text(str(i)) for i in distinct_ids)}）；"
+                    "同一中文 name 应只对应一个 id，请人工合并或修正。"
+                ),
+                [
+                    EvidenceRef(
+                        artifact=f"{bible_name}.json",
+                        path=str(run_dir / f"{bible_name}.json"),
+                        locator=f"$.{list_key}[?(@.name=={cname!r})]",
+                    )
+                ],
             )
 
     # ----- 3. missing critical visual field -----
@@ -789,23 +829,22 @@ def _check_bible_self_consistency(
                 break
         if all_empty:
             field_names = "/".join(critical_visual_fields)
-            findings.append(
-                DiagnoseFinding(
-                    severity="warning",
-                    code=missing_field_code,
-                    message=(
-                        f"{bible_name}.json entries[{idx}]（id={eid!r}）"
-                        f"关键视觉字段全部为空（{field_names}）；"
-                        "下游 prompt 将退化为空字符串，建议补全。"
-                    ),
-                    evidence=[
-                        EvidenceRef(
-                            artifact=f"{bible_name}.json",
-                            path=str(run_dir / f"{bible_name}.json"),
-                            locator=f"$.{list_key}[{idx}]",
-                        )
-                    ],
-                )
+            _add_finding(
+                findings,
+                "warning",
+                missing_field_code,
+                (
+                    f"{bible_name}.json entries[{idx}]（id={eid!r}）"
+                    f"关键视觉字段全部为空（{field_names}）；"
+                    "下游 prompt 将退化为空字符串，建议补全。"
+                ),
+                [
+                    EvidenceRef(
+                        artifact=f"{bible_name}.json",
+                        path=str(run_dir / f"{bible_name}.json"),
+                        locator=f"$.{list_key}[{idx}]",
+                    )
+                ],
             )
 
 

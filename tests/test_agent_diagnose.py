@@ -1020,6 +1020,104 @@ def test_clean_bibles_no_self_consistency_finding(tmp_path: Path) -> None:
     assert not any(c.startswith(("character_bible_", "location_bible_", "prop_bible_")) for c in codes)
 
 
+# ----- P1 redaction regression: secret in bible id / name / missing-visual field id -----
+
+
+def test_r14_redacts_secret_in_character_id_and_locator(tmp_path: Path) -> None:
+    """R14 P1 redaction: character id embedding a leaked token must
+    be redacted from BOTH ``finding.message`` and the EvidenceRef
+    JSONPath ``locator`` (the two exits the Codex manual review
+    flagged as ``secret-in-id leaks through locator``).
+
+    The id_conflict path exercises both: the message contains
+    ``id {cid!r} ...`` and the locator contains
+    ``f"$.{{list_key}}[?(@.id=={cid!r})]"``. Both must end up as
+    ``<redacted>`` via the centralized ``_add_finding`` helper.
+    """
+    secret = "sk-leak-r14-id-1234567890abcdef"
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "character_bible.json").write_text(
+        json.dumps(
+            {
+                "characters": [
+                    {"id": secret, "name": "林夏",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": secret, "name": "林夏_别名",
+                     "appearance": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_locations_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    # The finding should still fire (the leak is in the message
+    # formatting, not in the rule itself).
+    assert "character_bible_internal_id_conflict" in _codes(report)
+    # The raw secret must not appear anywhere in the serialized report.
+    serialized = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert secret not in serialized
+    # And ``<redacted>`` should appear (the secret got replaced).
+    assert "<redacted>" in serialized
+
+
+def test_r15_redacts_secret_in_location_name_and_locator(tmp_path: Path) -> None:
+    """R15 P1 redaction: location name embedding a leaked token must
+    be redacted from ``finding.message`` and EvidenceRef locator
+    (name_conflict path).
+    """
+    secret = "sk-leak-r15-name-1234567890abcdef"
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "location_bible.json").write_text(
+        json.dumps(
+            {
+                "locations": [
+                    {"id": "office_a", "name": secret,
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                    {"id": "office_b", "name": secret,
+                     "space_layout": "x", "positive_prompt": "p", "negative_prompt": "n"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_props(run_dir)
+    report = diagnose_run_dir(run_dir)
+    assert "location_bible_internal_name_conflict" in _codes(report)
+    serialized = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert secret not in serialized
+    assert "<redacted>" in serialized
+
+
+def test_r16_redacts_secret_in_prop_id_missing_visual_field(tmp_path: Path) -> None:
+    """R16 P1 redaction: prop entry id embedding a leaked token must
+    be redacted from the missing-visual-field ``finding.message``
+    (which interpolates ``id={eid!r}``).
+    """
+    secret = "sk-leak-r16-id-1234567890abcdef"
+    run_dir = _make_minimal_run(tmp_path)
+    (run_dir / "prop_bible.json").write_text(
+        json.dumps(
+            {
+                "props": [
+                    {"id": secret, "name": "文件夹",
+                     "visual": "", "positive_prompt": "", "negative_prompt": ""},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_clean_bibles_for_chars_and_locs(run_dir)
+    report = diagnose_run_dir(run_dir)
+    assert "prop_bible_missing_visual_field" in _codes(report)
+    serialized = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+    assert secret not in serialized
+    assert "<redacted>" in serialized
+
+
 # ----- Helpers used by R14/R15/R16 tests -----
 def _write_clean_bibles_for_locations_and_props(run_dir: Path) -> None:
     """Write only location_bible + prop_bible (clean)."""

@@ -1,5 +1,43 @@
 # Handoff
 
+## 当前状态（2026-07-15 - Phase 3 P2 diagnose continuity-audit Codex 复审修复 P1 + P3 status cleanup，待 Codex 复审放行）
+
+按 Codex 手工对手方对 Phase 3 P2 diagnose continuity-audit (commit `610e5b7`) 的复审结论，verdict **暂不建议进入下一步**：功能测试全绿，但 R14/R15/R16 新增 finding 有 secret-redaction 红线漏洞。本轮按 **P1 必修 + P3 status cleanup 单独 commit** 模板收口。
+
+### P1 修复（修齐 secret 泄露出口，3 处 → `_add_finding` 集中)
+
+- **`planner/agent/diagnose.py` 新增 `_add_finding` helper**：与 `planner/agent/review.py::_add_finding` 镜像，集中对 `message + EvidenceRef.artifact + .path + .locator` 全部走 `_safe_text`；模块私有，不跨模块 import（依赖面扁平 + 避免后续 tweak 级联，与 `_safe_text` 现有镜像契约一致）。
+- **`_check_bible_self_consistency` 3 处 inline finding 改走 helper**：
+  - id conflict 分支（覆盖 L705 `cid!r` in message + L713 `cid!r` in locator）
+  - name conflict 分支（覆盖 L733 `cname!r` in message + L741 `cname!r` in locator）
+  - missing visual field 分支（覆盖 L797 `eid!r` in message）
+- 保留 `missing_required` 分支原 append —— 那里 `eid`/`ename`/`missing_required` 全是字面/空，无 raw user content 可泄露；改 helper 反而无实际收益且会让 diff 失焦。
+- 5 处 reviewer-flagged leak 全部封闭：`sk-` / `sk-ant-` / `gho_` / `Bearer <token>` 与现有 4 条 redact regex 对齐。
+
+### Tests（`tests/test_agent_diagnose.py` +3 secret redaction 回归）
+
+- `test_r14_redacts_secret_in_character_id_and_locator` —— R14 id_conflict，断言 secret 不在 serialized + `<redacted>` 已替换 + finding 仍 emit。
+- `test_r15_redacts_secret_in_location_name_and_locator` —— R15 name_conflict，覆盖 message + locator 两处 exit。
+- `test_r16_redacts_secret_in_prop_id_missing_visual_field` —— R16 missing_visual_field，覆盖 message 的 `id={eid!r}` exit。
+
+### P3 status cleanup（单独 commit）
+
+- 删 `PROJECT_STATUS.json:232` 的 stale `phase3_p2_review_batch_codex_manual_round2_re_review_pending`（review-batch round-2 早已 commit/push + 后续 round-3/4 复审均已通过；该行已脱钩）
+- `phase` / `status` / `completed_steps` / `verification` 同步推进到 `codex_redaction_fixed`
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- **431 pytest**（428 + 3），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留（helper 内 message + EvidenceRef 三字段全部 `_safe_text`；bible 缺失/损坏 skip 不重报）。
+- harness 7 scenarios 全过 + live cross-check + live agent replay，包括 `diagnose_secret_redaction` scenario。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 diagnose continuity-audit 修复**（重点看 `_add_finding` 是否覆盖全部 raw user content 出口 / 与 review.py 镜像契约是否一致 / 3 个回归测试 fixture 是否真匹配 regex / `next_actions` 是否还有 stale / 三件套是否对齐）。
+- **Phase 3 P2 可选 next**：GUI agent 面板（按"核心先于壳层"原则）；opt-in probe；Phase Core-3 跨集连续性。
+
 ## 当前状态（2026-07-14 - Phase 3 P2 diagnose continuity-audit R14/R15/R16 完工，待 Codex 复审）
 
 按 user-ack 进入 `phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift`，范围限定**单 run 内 bible self-consistency**，落地在 `planner/agent/diagnose.py` 加 3 条独立规则；CLI 不变；不新增 harness scenario；不做 GUI 面板；跨集 drift 仍归 review-batch rb1-rb3。design brief 落 `.context/plan/continuity_audit_r14_r15_r16.md`。

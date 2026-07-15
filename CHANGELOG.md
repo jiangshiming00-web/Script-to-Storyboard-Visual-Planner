@@ -2,6 +2,75 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-15 (Proma Phase 3 P2 - diagnose continuity-audit Codex 复审修复 P1 + P3 status cleanup)
+
+按 Codex 手工对手方对 Phase 3 P2 diagnose continuity-audit (commit `610e5b7`) 的复审结论，verdict **暂不建议进入下一步**：功能测试全绿，但 R14/R15/R16 新增 finding 有 secret-redaction 红线漏洞。本轮按 **P1 必修 + P3 status cleanup 单独 commit** 模板收口。
+
+### Findings → Fixes
+
+#### P1（必修）：R14/R15/R16 通过 bible id / name 泄露 secret
+
+**Bug**: `planner/agent/diagnose.py::_check_bible_self_consistency` 在 R14/R15/R16 的 5 处插值 `cid!r` / `cname!r` / `eid!r` 既未走 `_safe_text`，也未走 EvidenceRef 的 redact 通道。最小复现：`character_bible.id = "sk-leak-r14-id-..."` 或 `name = "sk-leak-r14-name-..."` 时，raw secret 同时出现在 `finding.message` 和 `EvidenceRef.locator`。
+
+5 处具体位置：
+- L705 `{cid!r}` in message
+- L713 `locator=f"$.{list_key}[?(@.id=={cid!r})]"`
+- L733 `{cname!r}` in message
+- L741 `locator=f"$.{list_key}[?(@.name=={cname!r})]"`
+- L797 `{eid!r}` in message（missing_visual_field 分支）
+
+**Fix**: `planner/agent/diagnose.py`：
+- 新增 `_add_finding(findings, severity, code, message, evidence)` helper —— 与 `planner/agent/review.py::_add_finding` 镜像（Phase 3 P2 review-run P2-2 同样的 redact-on-exit 模板），集中对 `message + EvidenceRef.artifact + .path + .locator` 全部走 `_safe_text`。两个 helper 保留为模块私有，不跨模块 import（保持依赖面扁平 + 避免后续 tweak 级联；与 `_safe_text` 现有镜像契约一致）。
+- `_check_bible_self_consistency` 内 3 个 `findings.append(DiagnoseFinding(...))` 改走 `_add_finding(findings, ...)`：
+  - id conflict 分支（覆盖 L705 + L713 两处）
+  - name conflict 分支（覆盖 L733 + L741 两处）
+  - missing visual field 分支（覆盖 L797）
+- 保留 missing_required 分支（id/name 缺失）的原 append —— 那里 `eid`/`ename`/`missing_required` 全是字面/空，无 raw user content 可泄露；改为 helper 反而无实际收益且会让 diff 失焦。
+
+#### P3（status cleanup，单独 commit）：`PROJECT_STATUS.json` stale `next_action`
+
+**Bug**: `PROJECT_STATUS.json:232` 仍写 `phase3_p2_review_batch_codex_manual_round2_re_review_pending`，但 review-batch round-2 已 commit/push + 后续 round-3/4 复审均已通过；该行与现状脱钩，干扰下一步判断。
+
+**Fix** (单独 commit)：
+- 删 `next_actions[0]` 那行
+- `phase` 推到 `v10_phase3_p2_diagnose_continuity_audit_codex_redaction_fixed`
+- `status` 推到 `v10_phase3_p2_diagnose_continuity_audit_codex_redaction_fixed_awaiting_codex_manual_re_review`
+- `completed_steps` 补 `phase3_p2_diagnose_continuity_audit_codex_redaction_fixed`
+- `verification` 加 1 行 `_redaction_pytest` / `_redaction_scenarios` 锚点
+- 测试拆分（line 304 `test_agent_diagnose.py 40 → 43`，line 569 `428 → 431`）；`v10_phase3_p2_continuity_audit_brief` 段落保留作为 re-entry 索引
+
+### Tests（`tests/test_agent_diagnose.py` +3 secret redaction 回归）
+
+- `test_r14_redacts_secret_in_character_id_and_locator` —— R14 id_conflict 路径，断言 secret 不出现在 serialized report，且 `<redacted>` 已替换；finding 仍然 emit。
+- `test_r15_redacts_secret_in_location_name_and_locator` —— R15 name_conflict 路径，覆盖 message + locator 两处 exit。
+- `test_r16_redacts_secret_in_prop_id_missing_visual_field` —— R16 missing_visual_field 路径，覆盖 message 的 `id={eid!r}` exit。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- **431 pytest**（428 旧 + 3 新增 secret redaction 回归），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留：
+  - helper 内部 message + EvidenceRef 三字段全部 `_safe_text`，对 bible 内的 `sk-` / `sk-ant-` / `gho_` / `Bearer <token>` 全覆盖（与现有 4 条 redact regex 对齐）。
+  - bible 缺失 / 损坏 / 顶层非 dict → 跳过规则（不重报，由 R12 / `_read_artifact_safe` 等已报告）。
+  - harness 不破：sample run 用 clean bible，新规则无 finding 触发；`diagnose_secret_redaction` scenario live cross-check + live replay 全过。
+- 与 `planner.agent.review._add_finding` 镜像契约：模块私有 + 同语义；未来任一处 helper 修订都需同步另一处（与 `_safe_text` 现有的镜像文档契约对齐）。
+
+### 验证
+
+- `python3 -m pytest` -- **431 passed, 2 warnings in 25.66s**；agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 43 + cli 19 + review 58 + boundaries 11（合计 170，比 `428` 多了 3 个新 secret redaction 测试）
+- `python3 -m pytest tests/test_agent_diagnose.py -q` -- **43 passed**
+- `python3 harness/agent_scenarios/run_all.py` -- 7 scenarios 全过 + live cross-check + live agent replay
+- `python3 -m json.tool PROJECT_STATUS.json` -- 通过
+- `git diff --check HEAD` -- 通过
+- `runs/` -- 仅含 `.gitkeep`
+
+### 不做（用户拍板 / 既定红线）
+
+- 不委托 validate_run 做 secret redaction（`_safe_text` 仍由 diagnose.py / review.py 自己负责，不引跨模块依赖）
+- 不抽 `_add_finding` 到 `planner/agent/_helpers.py` 共享模块（与 `_safe_text` 镜像契约一致；保持模块私有避免级联 tweak）
+- 不替换 `findings.append(DiagnoseFinding(...))` 全局为 `_add_finding`（只补 R14/R15/R16 这 3 处真正有 raw user content 的出口；其余 append 没风险）
+
 ## 2026-07-14 (Proma Phase 3 P2 - diagnose continuity-audit R14/R15/R16)
 
 按 user-ack 进入 Phase 3 P2 `phase3_p2_extend_diagnose_rules_for_continuity_audit_character_scene_prop_drift`。范围：**单 run 内 bible self-consistency**（不依赖 batch context，跨集 drift 仍归 review-batch rb1-rb3），落地在 `planner/agent/diagnose.py` 加 3 条独立规则；CLI 不变；不新增 harness scenario；不做 GUI 面板。
