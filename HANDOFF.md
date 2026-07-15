@@ -46,7 +46,7 @@
   5. P3 wording 是否仍残留旧 "outer wall-clock" 字眼
   6. 三件套是否对齐
 - **Codex 通过后**：
-  - `git push origin main`（本地 ahead origin 3 commits → 4 commits）
+  - `git push origin main`（本地 ahead origin 1 commit → 2 commits）
   - 启动 Round 3：Phase 3 P2 收口（不接 GUI 面板 / 不动 core3 bible merge / opt-in probe 已闭环）
 - **Codex 未通过**：按反馈再修，单独 commit + 再次复审。
 
@@ -101,7 +101,7 @@
   5. CLI default settings fallback 与 `health_check()` 镜像契约一致；
   6. 5 个回归测试真匹配 regex / fixture 真有 secret / 默认 settings 真走到 defaults。
 - **Codex 通过后**：
-  - `git push origin main`（本地 ahead origin 2 commits → 4 commits）。
+  - `git push origin main`（本地 ahead origin 1 commit → 2 commits）。
   - 启动 Round 2（`tests/test_provider_probe.py` +18 unit + `tests/test_cli_provider_probe.py` +10 cli + 2 个 harness scenario）。
 - **Codex 未通过**：按 P1/P2 反馈再修，单独 commit + 再次复审。
 

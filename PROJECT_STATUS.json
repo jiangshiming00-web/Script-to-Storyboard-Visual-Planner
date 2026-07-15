@@ -236,7 +236,6 @@
   "next_actions": [
     "phase3_p2_provider_probe_round2_codex_manual_re_review_pending",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
-    "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
     "core4_add_planner_rebuild_prompts_diff_diff_episodes",
     "core4_add_planner_heuristics_density_min_characters_min_word_count",
@@ -603,6 +602,6 @@
     "v10_phase3_p2_provider_probe_round2_scenarios": "pass (9 scenarios; live cross-check + live agent replay + live probe replay (provider_probe_opt_in local http.server returning 200 -> exit 0 + healthy=true; provider_probe_gate_closed no env -> exit 2 + one-line stderr policy refusal) all green; existing 7 scenarios unaffected)",
     "v10_phase3_p2_provider_probe_round2_smoke": "pass (4 CLI paths unchanged: gate closed env unset -> exit 2 + one-line stderr; PLANNER_PROBE=1 --provider deterministic -> exit 1 + NotImpl message; --provider openai -> exit 1 + ALIGNMENT_HINT; --provider openai_compatible -> exit 0/2 with redaction. All 0 traceback on stderr; exit codes match brief §2.3 table)",
     "v10_phase3_p2_provider_probe_round2_diff": "9 files in commit: planner/cli.py (--timeout-ms help wording) + planner/providers/base.py (probe docstring wording) + planner/providers/openai_compatible_adapter.py (probe docstring wording) + tests/test_provider_probe.py (NEW 18 unit + bonus 1) + tests/test_cli_provider_probe.py (NEW 10 cli subprocess) + harness/agent_scenarios/provider_probe_opt_in.json (NEW) + harness/agent_scenarios/provider_probe_gate_closed.json (NEW) + harness/agent_scenarios/run_all.py (socket + threading + http.server imports; VALID_CATEGORIES + VALID_RISK_LEVELS extended; _run_planner_probe_cli + _spawn_local_probe_server + _stop_local_probe_server + _write_model_config + _validate_probe_opt_in_replay + _validate_probe_gate_closed_replay helpers; main() probe branch) + CHANGELOG.md (本段) + HANDOFF.md (本段) + PROJECT_STATUS.json (本段). JSON validated, diff --check clean.",
-    "v10_phase3_p2_provider_probe_round2_no_push_yet": "pass (本地 main 仍 ahead origin 3 commits (0128dd1 + b449f8c + 856a2d2); 本 round commit 后等 Codex 复审通过再 push; Round 3 收口 + GUI panel + core3 bible merge 等都留 Round 3+)"
+    "v10_phase3_p2_provider_probe_round2_no_push_yet": "pass (本地 main 仍 ahead origin 1 commit (ce962d3); 本 round commit 后等 Codex 复审通过再 push; Round 3 收口 + GUI panel + core3 bible merge 等都留 Round 3+)"
   }
 }

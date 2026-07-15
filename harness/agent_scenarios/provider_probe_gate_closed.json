@@ -1,7 +1,7 @@
 {
   "scenario_id": "provider_probe_gate_closed",
   "version": "1.0",
-  "description": "Default-deny check: `planner provider-probe` invoked without PLANNER_PROBE=1 (env unset / \"0\" / \"true\" / \"\" / typos) MUST exit 2 with one-line stderr policy refusal and ZERO network calls. Patches urllib.request.urlopen to raise AssertionError on any socket bind so the harness can prove the gate is enforced before any HTTP layer is reached. Mirrors the `_find_free_port` style in-process monkeypatch pattern used by harness/smoke_gui.py.",
+  "description": "Default-deny check: `planner provider-probe` invoked without PLANNER_PROBE=1 (env unset / \"0\" / \"true\" / \"\" / typos) MUST exit 2 with one-line stderr policy refusal and ZERO network calls. Verified structurally: the CLI gate is enforced by `_probe_gate_open()` BEFORE provider resolution / settings build / model-config load, so the probe never reaches `urllib.request.urlopen`. The replay asserts exit code 2 + one-line stderr policy refusal markers; the no-network guarantee is by construction (gate runs first), not by a runtime monkeypatch. Future hardening could add an in-process monkeypatch layer (patch urllib.request.urlopen to raise AssertionError and assert the patch never fires) — tracked separately.",
   "category": "probe",
   "risk_level": "read_only",
   "expected_outcome": "gate_closed_policy_refusal",
@@ -47,7 +47,7 @@
   "expected_approval_requests": [],
   "assertions": [
     "PLANNER_PROBE unset OR != \"1\" → exit 2 with one-line stderr policy refusal",
-    "no urllib.request.urlopen call is made (assertion patch never fires)",
+    "no urllib.request.urlopen call is reachable: the gate check runs BEFORE provider resolution and settings build, so even an invalid --provider does not trigger any network layer (asserted structurally, not by runtime monkeypatch)",
     "stderr contains 'opt-in only' and 'PLANNER_PROBE=1' as substring markers",
     "stdout is empty (policy refusal is on stderr)",
     "no Python traceback in stderr",

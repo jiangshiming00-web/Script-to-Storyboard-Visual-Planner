@@ -237,7 +237,7 @@ class BaseProvider(ABC):
         * ``probe()`` is the opt-in network round-trip that **only**
           the ``planner provider-probe`` CLI subcommand triggers.
 
-        ``timeout_ms`` is the CLI-facing outer wall-clock budget
+        ``timeout_ms`` is the CLI-facing socket-level timeout
         (default 5000ms per brief §2.2). Adapters that don't issue
         network traffic (``deterministic``, the ``openai`` /
         ``anthropic`` Phase-1 skeletons) accept the kwarg and
