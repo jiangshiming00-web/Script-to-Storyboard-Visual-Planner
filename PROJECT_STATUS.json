@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-15",
-  "phase": "v10_phase3_p2_provider_probe_design_brief_landed",
-  "status": "v10_phase3_p2_provider_probe_design_brief_landed_awaiting_codex_design_review",
+  "phase": "v10_phase3_p2_provider_probe_round1_implementation_landed",
+  "status": "v10_phase3_p2_provider_probe_round1_landed_awaiting_codex_round4_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -151,7 +151,8 @@
     "phase3_p2_review_batch_codex_round2_batch_membership_fixed",
     "phase3_p2_diagnose_continuity_audit_r14_r15_r16_landed",
     "phase3_p2_diagnose_continuity_audit_codex_redaction_fixed",
-    "phase3_p2_provider_probe_design_brief_landed"
+    "phase3_p2_provider_probe_design_brief_landed",
+    "phase3_p2_provider_probe_round1_implementation_landed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -231,7 +232,7 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_provider_probe_design_brief_codex_round2_design_review_pending",
+    "phase3_p2_provider_probe_round1_codex_review_pending",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
@@ -586,6 +587,8 @@
     "v10_phase3_p2_continuity_audit_redaction_scenarios": "pass (7 scenarios unchanged; diagnose_secret_redaction live cross-check + live replay both green; sample dev run still uses clean bible so new rules do not falsely trigger)",
     "v10_phase3_p2_provider_probe_design_brief": "pass (design brief landed round 1; round-1 brief lives at workspace-files ephemeral path; superseded by round-2 below)",
     "v10_phase3_p2_provider_probe_design_brief_round2": "pass (supersedes round-1; new brief committed to docs/design/provider_probe_design.md ~13 KB; 9 Goals G1-G9 + 4 Adapter scope + 22 test cases (14 unit + 8 cli) + 2 harness scenarios + 4 Open Questions + 3-round impl plan; P1-1 endpoint rstrip+'/models' pattern mirroring openai_compatible_adapter.py:431; P1-2 brief moved into repo git-tracked docs/design/; P2 CLI trigger=planner provider-probe (no --probe flag) + env gate AND + unified exit code table (gate close=2 / not_impl=1 / unhealthy=2 / healthy=0); P3 stale next_actions cleaned + ProviderProbeError class-name unified across CHANGELOG/HANDOFF/brief/PROJECT_STATUS; 0 code change this round; pytest still 431 with no regression)",
-    "v10_phase3_p2_provider_probe_design_brief_round2_diff": "4 files in commit: NEW docs/design/provider_probe_design.md (~13 KB brief round-2 supersede round-1) + CHANGELOG.md (round-2 entry on top + typo fix at line 13 PlannerProbeError -> ProviderProbeError) + HANDOFF.md (top section updated to brief round-2 + 4 findings tracking) + PROJECT_STATUS.json (stale next_action removed + verification rows added + ProviderProbeError name sync). Archive pointer at workspace-files/.context/plan/probe_design.md kept as Round-1 reference. JSON validated, diff --check clean."
+    "v10_phase3_p2_provider_probe_design_brief_round2_diff": "4 files in commit: NEW docs/design/provider_probe_design.md (~13 KB brief round-2 supersede round-1) + CHANGELOG.md (round-2 entry on top + typo fix at line 13 PlannerProbeError -> ProviderProbeError) + HANDOFF.md (top section updated to brief round-2 + 4 findings tracking) + PROJECT_STATUS.json (stale next_action removed + verification rows added + ProviderProbeError name sync). Archive pointer at workspace-files/.context/plan/probe_design.md kept as Round-1 reference. JSON validated, diff --check clean.",
+    "v10_phase3_p2_provider_probe_round1": "pass (Round 1 implementation per brief §3; ProviderProbeError in exceptions.py + ProviderProbeResult dataclass + BaseProvider.probe() abstract in base.py + 4 adapter overrides (deterministic / openai skeleton / anthropic skeleton raise NotImpl + ALIGNMENT_HINT; openai_compatible real GET {base_url.rstrip('/')}/models with 5s timeout + _redact_secrets) + planner/cli.py provider-probe subcommand with _probe_gate_open() AND-gate (env exactly '1') + click.echo+ctx.exit(2) one-line policy refusal (NOT click.UsageError multi-line) + unified exit code table (gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0) + stdout one-line JSON; re-exports in planner/providers/__init__.py; test fixture sync _EchoProvider + _UnhealthyStubProvider + _Ephemeral raise NotImpl on probe; brief P3 inline fixes (test counts +14/+8 -> +18/+10; §2.2 sample code click.UsageError -> ctx.exit(2)). 0 test additions (Round 2 lands the +18 unit + +10 cli); pytest 431 passed consistent with 1576d20; CLI smoke 4 paths all exit codes match brief §2.3; 0 traceback on stderr).",
+    "v10_phase3_p2_provider_probe_round1_diff": "11 files in commit: docs/design/provider_probe_design.md (P3 brief drift fix: §2.2 sample code click.UsageError -> ctx.exit(2), §4.1 +14 -> +18, §4.2 +8 -> +10, §8 impl plan same alignment) + planner/cli.py (+/_probe_gate_open + provider-probe subcommand) + planner/exceptions.py (+ ProviderProbeError) + planner/providers/__init__.py (re-export ProviderProbeResult + http_get) + planner/providers/anthropic_adapter.py (probe raise NotImpl) + planner/providers/base.py (ProviderProbeResult + abstract probe) + planner/providers/deterministic.py (probe raise NotImpl) + planner/providers/openai_adapter.py (probe raise NotImpl + ALIGNMENT_HINT) + planner/providers/openai_compatible_adapter.py (_default_http_get + http_get + probe real impl with §2.5 endpoint contract) + tests/test_provider_health.py (probe stubs for _UnhealthyStubProvider + _Ephemeral) + tests/test_providers.py (probe stub for _EchoProvider). JSON validated, diff --check clean."
   }
 }

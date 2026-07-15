@@ -1,5 +1,67 @@
 # Handoff
 
+## 当前状态（2026-07-15 - Phase 3 P2 probe Round 1 implementation landed，等 Codex 复审 Round 1 + Round 2 tests/harness 启动）
+
+Codex PASS on round-2 brief (`1576d20`)，本轮按"Round 1 实现 + 2 P3 文案/测试数顺手修" 落地。Round 1 = 生产代码 + test fixture 同步（不新增测试，新测试留给 Round 2）。
+
+### Round 1 落地清单
+
+- **`planner/exceptions.py`**：`ProviderProbeError(PlannerError)` 新增，docstring 列出 3 种失败模式（NotImpl/healthy=False/gate-closed）+ CLI 退出码分发
+- **`planner/providers/base.py`**：
+  - `ProviderProbeResult` dataclass (`frozen=True`)
+  - `BaseProvider.probe()` abstract，默认 raise `NotImplementedError`
+  - 严格隔离 invariants inline 注释（health_check/probe 不互相调用）
+- **4 adapter override**（brief §3 范围）：
+  - `deterministic` / `openai` skeleton / `anthropic` skeleton → raise NotImpl + ALIGNMENT_HINT
+  - `openai_compatible` → 真实现 GET `{settings.base_url.rstrip("/")}/models`（brief §2.5 endpoint 契约：默认 OpenAI / Ollama / vLLM / trailing-slash 全部不双拼）；5s socket timeout + `_redact_secrets` 4 regex 出口
+- **`planner/providers/__init__.py`**：re-export `ProviderProbeResult` + `http_get`
+- **`planner/cli.py`**：顶级子命令 `planner provider-probe` + `_probe_gate_open()`：
+  - env gate exactly `"1"`（strict exact match）
+  - gate closed 时手动 `click.echo + ctx.exit(2)` 一行 stderr（**不**用 `Click.UsageError` 默认 multi-line usage）—— brief §2.2 同步修正
+  - 退出码统一表：gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0（brief §2.3）
+  - stdout one-line JSON（redact reason + optional latency_ms + `--verbose` 时 details）
+- **test fixture 同步**：`tests/test_providers.py::_EchoProvider` + `tests/test_provider_health.py::_UnhealthyStubProvider` + `tests/test_provider_health.py::_Ephemeral` 加 `probe()` raise NotImpl（mirror skeleton，避免"registry accepts third-party subclasses"被 probe 抽象静默回退）
+
+### CLI smoke 实测（4 路径）
+
+- `planner provider-probe`（env unset）→ **exit 2** + 一行 stderr policy refusal
+- `PLANNER_PROBE=0 ...` → **exit 2**（同上）
+- `PLANNER_PROBE=1 ... --provider deterministic` → **exit 1** + `probe not implemented for 'deterministic'`
+- `PLANNER_PROBE=1 ... --provider openai` → **exit 1** + skeleton gate + ALIGNMENT_HINT
+- 4 路径 stderr 全部 0 traceback
+
+### Brief P3 顺手修（commit `0128dd1` 内联）
+
+- §2.2 sample code: `click.UsageError` → `click.echo + ctx.exit(2)`（一行 stderr，brief 与 CLI 实现对齐）
+- §4.1 header: `+14 unit` → `+18 unit`（实际表 18 条）
+- §4.2 header: `+8 cli` → `+10 cli`（实际表 10 条）
+- §8 implementation plan: `+14 unit / +8 cli` → `+18 unit / +10 cli`
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click` + stdlib `urllib`。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- pytest **431 passed**（与 `1576d20` 一致，0 回归，Round 1 0 测试新增）
+- 4 路径 CLI smoke 全 0 traceback、exit code 与 brief §2.3 表完全对齐
+- probe 永不写 `run_summary.json`；与 `health_check` 严格隔离（brief §2.7 invariants）
+
+### 下一轮
+
+- **Codex 复审 Round 1 实现 + 等 Codex PASS**：
+  - 重点看 `BaseProvider.probe()` 默认 raise 的健壮性 + 4 adapter override scope 是否覆盖 brief §3
+  - `_probe_gate_open()` strict `"1"` 是否过严 / 过宽
+  - `openai_compatible.probe()` 5s timeout + `_redact_secrets` 出口是否覆盖 raw secret
+  - `cli.py` ProviderProbeError vs NotImplementedError 分流是否清晰
+  - test fixture 加 `probe()` 后原 8 个测试是否回归干净（已 verify: 25/25 passed）
+- **Round 2（过审后启动）**：`tests/test_provider_probe.py` +18 unit + `tests/test_cli_provider_probe.py` +10 cli + 2 个 harness scenario + `run_all.py` 入口 7 → 9
+- **Round 3**：三件套 + 三轮复审闭环 + push
+
+### 候补 next_actions
+
+1. `phase3_p2_provider_probe_round1_codex_review_pending` → 本 round
+2. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` → 等 probe 完成后
+3. `core3_add_planner_bible_merge_for_cross_episode_continuity` → 最大范围，独立 user-ack
+
 ## 当前状态（2026-07-15 - provider probe design brief round-2 fix landed，等 Codex 设计复审二审后启动实现 Round 1）
 
 按 Codex manual review of round-1 brief (`4121276`) 的 4 findings（2 P1 + 1 P2 + 1 P3）全部收口，brief round-2 supersede round-1 入库到 `docs/design/provider_probe_design.md`。0 代码改动。

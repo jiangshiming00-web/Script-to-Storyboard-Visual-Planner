@@ -2,6 +2,73 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-15 (Proma Phase 3 P2 prep - provider probe Round 1 implementation landed)
+
+Codex 复审 round-2 brief (`1576d20`) verdict **PASS**，2 P3 文案/测试数顺手修一起落到 Round 1 commit。本 commit 范围：brief P3 微调 + Round 1 生产代码（无测试新增，Round 2 才加）。三件套同步在单独 P3 status cleanup commit。
+
+### Added (Round 1 生产代码)
+
+- **`planner/exceptions.py::ProviderProbeError(PlannerError)`** — 与 `ProviderUnavailableError`（pipeline 选型 gate）和 `ProviderOutputError`（响应解析 gate）严格区分；docstring 列出 3 种失败模式（NotImpl/healthy=False/gate-closed）的 CLI 退出码分发。
+- **`planner/providers/base.py::ProviderProbeResult` dataclass** — `frozen=True` 不可变点时快照；与 `ProviderHealth` 在 "本地配置 vs 网络真探" 上严格区分。
+- **`planner/providers/base.py::BaseProvider.probe()` abstract** — 默认 raise `NotImplementedError`，与 `health_check()` 完全互不调用（brief §2.7 strict separation）。
+- **4 adapter override**（与 brief §3 一致）：
+  - `deterministic.probe()` → raise NotImpl（无远程端点）
+  - `openai_adapter.probe()` → raise NotImpl + ALIGNMENT_HINT（skeleton）
+  - `anthropic_adapter.probe()` → raise NotImpl + ALIGNMENT_HINT（skeleton，无 cheap model-listing endpoint）
+  - `openai_compatible.probe()` → 真实现 GET `{settings.base_url.rstrip("/")}/models`，完整 brief §2.5 endpoint 契约（默认 OpenAI / Ollama / vLLM / trailing-slash 全部不双拼）；5 秒 socket timeout + `_redact_secrets` 4 regex 出口；新 `_default_http_get` + `http_get` 句柄与现有 `_default_http_post` / `http_post` 镜像（Round 2 tests monkeypatch 模式不变）
+- **`planner/providers/__init__.py`** — re-export `ProviderProbeResult` + `http_get`；模块 docstring 加 Probe 段指向 brief。
+- **`planner/cli.py`** — 顶级子命令 `planner provider-probe`：
+  - `_probe_gate_open()` 单点 env gate（exactly `"1"`，strict exact match）
+  - gate closed 时手动 `click.echo + ctx.exit(2)` 一行 stderr（**不**用 `click.UsageError` 默认 multi-line usage）—— brief §2.2 也同步从 `UsageError` 改成 `ctx.exit(2)` 模板
+  - 退出码统一表（brief §2.3）：gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0
+  - stdout 输出 one-line JSON（`provider` / `healthy` / `reason` + optional `latency_ms` + `--verbose` 时 `details`），全部走 `redact_secrets_text`
+- **test fixture 同步**：`_EchoProvider` / `_UnhealthyStubProvider` / `_Ephemeral` 加 `probe()` raise NotImpl（mirror skeleton 模式，避免"registry accepts third-party subclasses"被 probe 抽象静默回退）。
+
+### Tests（本轮 Round 1 = 实现级，0 测试新增）
+
+- `python3 -m pytest`：**431 passed**（与上一轮一致；基线测试数不变）
+- 0 回归：3 个 stub provider 加 `probe()` raise 后所有原 test_provider_health.py / test_providers.py 测试绿回来
+- **Round 2 待加**（brief §4 锁定）：
+  - `tests/test_provider_probe.py` +18 unit（4 endpoint 守卫 / 3 env gate / 11 其它）
+  - `tests/test_cli_provider_probe.py` +10 cli（4 distinct exit code 表 / 1 no-`--probe`-flag 守卫 / 5 其它）
+  - `harness/agent_scenarios/provider_probe_opt_in.json` + `..._gate_closed.json`（总计 7 → 9 scenarios）
+
+### Red line 守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。probe 用 stdlib `urllib.request`，OpenAI / Anthropic SDK 仍不进必需依赖。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- API key 永不写盘：probe 输出走 `redact_secrets_text` 4 regex（Bearer / sk- / sk-ant- / gho_），`Authorization: Bearer <key>` 头部只在请求里出现，**绝不**回写到 `details`（只回 `api_key_env` env var 名称）。
+- probe 永不写 `run_summary.json`：单独 CLI 子命令，无 run 上下文。
+- production fail-closed：`planner provider-probe` 子命令不创建 run 产物，零磁盘足迹；probe 失败时 exit 2 不影响 pipeline。
+- 不静默放宽：env gate `_probe_gate_open()` exactly `"1"`，无 truthy 别名；不与 `health_check` 互调（§2.7 严格隔离）。
+
+### CLI smoke 实测
+
+- `planner provider-probe`（env unset）→ **exit 2** + 一行 stderr policy refusal
+- `PLANNER_PROBE=0 python3 -m planner provider-probe` → **exit 2**（同上）
+- `PLANNER_PROBE=1 ... --provider deterministic` → **exit 1** + `probe not implemented for 'deterministic'`
+- `PLANNER_PROBE=1 ... --provider openai` → **exit 1** + skeleton gate message + ALIGNMENT_HINT
+- 4 路径 stderr 全部 0 traceback
+
+### 验证
+
+- `python3 -m pytest` -- **431 passed, 2 warnings in 20.87s**（与上一轮 `1576d20` 一致）
+- `python3 -c "from planner.cli import cli; print('provider-probe' in cli.commands)"` -- True
+- `python3 -m json.tool PROJECT_STATUS.json` -- 通过
+- `git diff --check HEAD~1 HEAD` -- clean
+- `python3 -m planner provider-probe --help` -- 渲染完整 AND-gate + 退出码表 docstring
+- 三件套 sync：CHANGELOG / HANDOFF / PROJECT_STATUS 在单独 `Phase 3 P2 status cleanup (Round 1 land)` commit
+
+### 不做（Round 1 边界）
+
+- 不加任何测试（Round 2 才对 18 unit + 10 cli 落笔）
+- 不加 harness scenario（Round 2 落 `provider_probe_opt_in.json` + `..._gate_closed.json`）
+- 不动 `pyproject.toml`
+- 不动 `health_check`（与 probe 严格隔离，brief §2.7）
+- 不持久化 probe 结果（brief §1.3 / §6 显式 v1.x 不做）
+- 不接 GUI 面板（probe CLI 子命令先落地）
+- 不并发（brief §1.3）
+
 ## 2026-07-15 (Proma Phase 3 P2 prep - provider probe design brief round-2 fix)
 
 Codex manual review of probe round-1 brief (`4121276`) verdict **暂不建议进入实现 Round 1**——2 P1 + 1 P2 + 1 P3 全是直接落地的阻断。本轮按"4 finding 全部收口 + brief 入库"模式 commit。0 代码改动。
