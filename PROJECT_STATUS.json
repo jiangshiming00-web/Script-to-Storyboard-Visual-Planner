@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-15",
-  "phase": "v10_phase3_p2_diagnose_continuity_audit_codex_redaction_fixed",
-  "status": "v10_phase3_p2_diagnose_continuity_audit_codex_redaction_fixed_awaiting_codex_manual_re_review",
+  "phase": "v10_phase3_p2_provider_probe_design_brief_landed",
+  "status": "v10_phase3_p2_provider_probe_design_brief_landed_awaiting_codex_design_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -150,7 +150,8 @@
     "phase3_p2_review_batch_codex_review_subsession_fixes_applied",
     "phase3_p2_review_batch_codex_round2_batch_membership_fixed",
     "phase3_p2_diagnose_continuity_audit_r14_r15_r16_landed",
-    "phase3_p2_diagnose_continuity_audit_codex_redaction_fixed"
+    "phase3_p2_diagnose_continuity_audit_codex_redaction_fixed",
+    "phase3_p2_provider_probe_design_brief_landed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -230,6 +231,7 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
+    "phase3_p2_provider_probe_design_brief_codex_design_review_pending",
     "phase3_p2_diagnose_continuity_audit_codex_manual_re_review_pending",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
@@ -582,6 +584,8 @@
     "v10_phase3_p2_continuity_audit_scenarios": "pass (7 scenarios unchanged; sample dev run uses clean bible so R14/R15/R16 do not fire finding; cross-check + live agent replay both green; no new scenario added per design brief decision)",
     "v10_phase3_p2_continuity_audit_redaction_pytest": "431 passed; agent/boundary collect: redact 17 + readers 13 + tools 9 + diagnose 43 + cli 19 + review 58 + boundaries 11 (subtotal 170); remaining is baseline tests; 0 regression (delta vs land 428 = +3 new secret-regression tests: R14 id_conflict + R15 name_conflict + R16 missing_visual_field); pytest 25.66s",
     "v10_phase3_p2_continuity_audit_redaction_diff": "diagnosed._add_finding (mirrors review._add_finding) redacts message + EvidenceRef.artifact + .path + .locator; _check_bible_self_consistency id/name/missing_visual_field 3 branches routed through helper; missing_required branch unchanged (literals only). Diff: 4 files / +295 / -51. Commit 6a326af.",
-    "v10_phase3_p2_continuity_audit_redaction_scenarios": "pass (7 scenarios unchanged; diagnose_secret_redaction live cross-check + live replay both green; sample dev run still uses clean bible so new rules do not falsely trigger)"
+    "v10_phase3_p2_continuity_audit_redaction_scenarios": "pass (7 scenarios unchanged; diagnose_secret_redaction live cross-check + live replay both green; sample dev run still uses clean bible so new rules do not falsely trigger)",
+    "v10_phase3_p2_provider_probe_design_brief": "pass (design brief landed at workspace-files/.context/plan/probe_design.md 8 KB; 8 Goals G1-G8 + 4 Adapter scope + 18 test cases + 2 harness scenarios + 4 Open Questions + 3-round implementation plan; 0 code change this round; pytest still 431 with no regression; brief untracked, not in git repo, mirrors continuity_audit_r14_r15_r16.md precedent)",
+    "v10_phase3_p2_provider_probe_design_brief_diff": "3 files committed: CHANGELOG.md / HANDOFF.md / PROJECT_STATUS.json (1-line each doc-only); brief itself lives at workspace-files level not in repo. JSON validated, diff --check clean."
   }
 }

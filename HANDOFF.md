@@ -1,5 +1,54 @@
 # Handoff
 
+## 当前状态（2026-07-15 - provider probe design brief landed，等 Codex 设计复审过审后启动实现 Round 1）
+
+按 user 拍板从 `next_actions[0]` 启动 probe 设计阶段。Scope 严格限定为 **design brief**——本轮 0 代码修改、0 测试新增；过审后启动 Round 1（实现）+ Round 2（测试 + harness）+ Round 3（三件套 + Codex 三轮复审 + push）。
+
+### 落地
+
+- `workspace-files/.context/plan/probe_design.md`（8 KB 设计契约）：
+  - **TL;DR**：`BaseProvider.probe()` opt-in 网络可达性探测；**CLI `--probe` × `PLANNER_PROVIDER_PROBE=1` env** 双开；默认 `NotImplementedError`；probe **绝不**写 `run_summary.json` / 不修改 `ProviderHealth` / 不被 `health_check()` 调用。
+  - **Goals G1-G8**：8 条量化验收信号（抽象方法 / 双重 gate / 默认 raise / 零写入 / `ProviderProbeError(PlannerError)` / 4-regex redact / 不进 `[project]` 必需依赖）。
+  - **2.1 抽象方法**：与 `health_check()` 对称；ABC；默认 raise。
+  - **2.2 入口控制**：`_probe_gate_open()` 单点 AND 判定。CLI flag = trigger、env = gate，互不替代——避免 alias / `.bashrc` 误触。
+  - **2.3 失败语义**：`not_implemented` exit 1；`healthy=False` exit 2；非 PlannerError 沿用 traceback 入 stderr。
+  - **2.5 红线守门**：对齐 `CLAUDE.md` §红线 全部条目。
+  - **2.6 与 `health_check` 严格分离**：8 维度对比表（调用频率 / 副作用面 / 输出 / 写盘 / 调用方 / 失败语义 / 默认 / Gate）；代码层两条都不互相调用。
+  - **3. Adapter 范围**：4 adapter (`deterministic` / `openai_compatible` / `openai` skeleton / `anthropic` skeleton)。`openai_compatible` 真实现 GET `{base_url}/v1/models`，其余 raise。
+  - **4. Test 范围**：3 文件 / 18 case（unit 12 + cli 6 + harness 2 个 scenario）。
+  - **5. Open Questions**：4 条（子命令名 / local-only probe 边界 / details redact 复用 / 失败重试）留 user 拍板。
+  - **8. Implementation Plan**：3 round skeleton（实现 / 测试 + harness / 三件套 + 三轮复审 + push）；预计 ~250 LOC 生产 + ~400 LOC 测试 + ~120 LOC harness。
+
+### 为什么单独 design brief
+
+- `BaseProvider.health_check` docstring 已写："Providers that need network reachability should expose an opt-in probe separately so the planner never silently spends money on a health check." 这是 base.py 的隐式 TODO，需要正式契约收。
+- `HANDOFF.md` 2026-07-10 已沉淀 5 条 probe 原则（默认 NotImplemented / 入口双重 / ProviderProbeError / 不进 `[project]` / 与 health_check 解耦），本 brief 在此基础上扩到可落地全契约。
+- probe 设计天花板低（接口数量小、Adapter 面固定），但红线密度高（任何别名 / 静默放宽都会破 fail-closed）。先 brief 后实现 = "Phase 收口前必经 Codex 复审"协作规范。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`（brief 阶段）。
+- 0 代码 / 0 测试修改。`python3 -m pytest`：**431 passed**（与上轮 `4426c14` 一致）。
+- 仓库 `runs/` 仍只含根 `.gitkeep`。
+- brief 落 `workspace-files/.context/plan/probe_design.md`（不入库；与 R14/R15/R16 brief 同路径约定）。
+
+### 下一轮
+
+- **Codex 设计复审 probe brief**：重点看
+  1. `BaseProvider.probe()` 抽象形状是否匹配现有 ABC 风格（与 `health_check()` 对称）
+  2. `_probe_gate_open()` AND 判定是否过严 / 过宽
+  3. `ProviderProbeError` 退出码语义（1 = not_implemented / 2 = unhealthy）
+  4. 4 adapter override 范围（特别是 `openai` / `anthropic` skeleton 真保持 `NotImplementedError` 还是骨架时就实现最小 probe）
+  5. harness 2 个新 scenario + 18 测试覆盖是否完整
+  6. 三件套是否对齐 + Open Questions 4 条是否需要先拍板
+- 通后启动 Round 1（实现）/ Round 2（测试 + harness）/ Round 3（三件套 + 三轮复审 + push）。
+
+### 候补 next_actions(本轮 Codex 复审通过后再启动哪一个)
+
+1. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` —— probe 通过后，agent 面板可以做" probe 状态 / 调用 probe"按钮
+2. `design_provider_optional_probe_separate_from_health_check_no_default_paid_call` —— **本轮已启动**(等 Codex 设计复审)
+3. `core3_add_planner_bible_merge_for_cross_episode_continuity` —— 最大范围，独立 user-ack 启动
+
 ## 当前状态（2026-07-15 - Phase 3 P2 diagnose continuity-audit Codex 复审修复 P1 + P3 status cleanup，待 Codex 复审放行）
 
 按 Codex 手工对手方对 Phase 3 P2 diagnose continuity-audit (commit `610e5b7`) 的复审结论，verdict **暂不建议进入下一步**：功能测试全绿，但 R14/R15/R16 新增 finding 有 secret-redaction 红线漏洞。本轮按 **P1 必修 + P3 status cleanup 单独 commit** 模板收口。
