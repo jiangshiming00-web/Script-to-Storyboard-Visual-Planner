@@ -79,7 +79,7 @@ from ..schema import (
     StoryBeat,
     VideoPrompts,
 )
-from .base import BaseProvider, ProviderHealth
+from .base import BaseProvider, ProviderHealth, ProviderProbeResult
 from .openai_compatible_adapter import ALIGNMENT_HINT
 from .registry import register
 
@@ -182,6 +182,32 @@ class OpenAIProvider(BaseProvider):
     name: str = "openai"
 
     # ---- health check -------------------------------------------------
+
+    def probe(self) -> ProviderProbeResult:
+        """Phase-1 skeleton: probe is intentionally not implemented.
+
+        Even when the operator has wired ``PLANNER_OPENAI_API_KEY``
+        and installed the optional ``openai`` SDK, the Phase-1
+        implementation gate keeps the planning methods raising
+        :class:`NotImplementedError`. We mirror that stance for
+        ``probe()`` — exposing a probe here would imply real-model
+        reachability is verifiable, which is a v1.x concern tied to
+        the planning method rollout.
+
+        The CLI top-level handler catches the exception, wraps to
+        ``ProviderProbeError(reason="not_implemented")``, and exits
+        ``1``. Operators who want a live reachability check against
+        the OpenAI endpoint should configure
+        ``planner_provider="openai_compatible"`` with
+        ``base_url="https://api.openai.com/v1"`` — that adapter
+        ships a real ``probe()`` per the brief §3 contract.
+        """
+        raise NotImplementedError(
+            "OpenAIProvider.probe is intentionally not implemented in "
+            "the Phase-1 skeleton. Configure provider='openai_compatible' "
+            "for an opt-in network probe against the OpenAI endpoint."
+            + ALIGNMENT_HINT
+        )
 
     def health_check(self) -> ProviderHealth:
         """Return local-only readiness for the OpenAI adapter.

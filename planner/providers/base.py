@@ -67,6 +67,50 @@ class ProviderHealth:
     details: Dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ProviderProbeResult:
+    """Outcome of one operator-initiated ``probe()`` call.
+
+    Distinct from :class:`ProviderHealth`: ``health_check`` is the
+    cheap local-only readiness gate that ``_select_provider`` runs
+    before every pipeline invocation; ``probe`` is the
+    opt-in network reachability check that **only** the
+    ``planner provider-probe`` CLI subcommand (or future GUI
+    analog) triggers. They share NO code path — see
+    ``docs/design/provider_probe_design.md`` §2.7 for the
+    8-dimension strict-separation table.
+
+    Field contracts:
+
+    * ``name``: echoes ``self.name`` so the CLI can label the row
+      even when the operator probes multiple providers in batch.
+    * ``healthy``: ``True`` only when the probe completed AND the
+      endpoint responded with a status the adapter considers
+      usable. ``False`` covers every "tried but failed" mode
+      (DNS / TCP / TLS / 4xx / 5xx / timeout).
+    * ``reason``: short human-readable explanation; **redacted**
+      via :func:`planner.agent.redact.redact_secrets_text` before
+      going to stderr / stdout. Never echoes raw API key values.
+    * ``latency_ms``: optional wall-clock latency of the round-trip;
+      ``None`` when the provider cannot self-time.
+    * ``details``: string-sentinel free-form dict (mirrors the
+      :class:`ProviderHealth.details` contract). Owned by the
+      provider; CLI surfaces under ``--verbose`` only, always
+      redacted.
+
+    The dataclass is ``frozen=True`` because probe results are
+    immutable point-in-time snapshots; mutating them after a
+    round-trip would suggest the probe was re-run, which is a
+    different operation and warrants a fresh result object.
+    """
+
+    name: str
+    healthy: bool
+    reason: Optional[str] = None
+    latency_ms: Optional[int] = None
+    details: Dict[str, str] = field(default_factory=dict)
+
+
 class BaseProvider(ABC):
     """Provider abstraction for the non-visual planner steps.
 
@@ -179,4 +223,54 @@ class BaseProvider(ABC):
         descriptive ``reason`` when their preconditions are not met so
         the pipeline can fall back to deterministic in development or
         fail-closed in production.
+        """
+
+    @abstractmethod
+    def probe(self) -> "ProviderProbeResult":
+        """Optional network reachability / sanity check.
+
+        Distinct from :meth:`health_check`. The two are deliberately
+        decoupled:
+
+        * ``health_check()`` is the always-on local-only signal that
+          ``_select_provider`` reads in the pipeline hot path.
+        * ``probe()`` is the opt-in network round-trip that **only**
+          the ``planner provider-probe`` CLI subcommand triggers.
+
+        Default implementation raises :class:`NotImplementedError`.
+        Adapters that don't expose a remote endpoint
+        (``deterministic``, the ``openai`` / ``anthropic``
+        Phase-1 skeletons) keep the default — the CLI top-level
+        catches the exception, wraps it into a structured
+        :class:`~planner.exceptions.ProviderProbeError` carrying
+        ``reason="not_implemented"``, and exits **1**. Adapters that
+        do expose a remote endpoint (``openai_compatible``) override
+        and return a :class:`ProviderProbeResult` whose ``healthy``
+        field drives the CLI exit code (``True`` → **0**,
+        ``False`` → **2**).
+
+        Implementation requirements for adapters that override:
+
+        * one HTTPS / HTTP round-trip at most (no polling, no retry).
+        * no LLM / paid inference calls — model-listing endpoints
+          (``{base_url.rstrip('/')}/models``) are the canonical
+          pattern.
+        * no on-disk side effects (never touches
+          ``run_summary.json``).
+        * outer wall-clock timeout enforced by the CLI; the adapter
+          SHOULD also set its own socket timeout (defense in depth).
+        * every string field returned goes through
+          :func:`planner.agent.redact.redact_secrets_text` before
+          reaching stderr / stdout. Bearer tokens, ``sk-...``,
+          ``sk-ant-...``, ``gho_...`` MUST NOT appear in the result.
+
+        Strict isolation contract (see brief §2.7):
+
+        * ``health_check`` MUST NOT call ``probe``.
+        * ``probe`` MUST NOT call ``health_check``.
+
+        Invoked only via the ``planner provider-probe`` CLI
+        subcommand, which checks ``PLANNER_PROBE=1`` env var + the
+        subcommand invocation itself as a double-gate before
+        reaching here (see brief §2.2).
         """

@@ -33,7 +33,7 @@ from ..schema import (
     StoryBeat,
     VideoPrompts,
 )
-from .base import BaseProvider, ProviderHealth
+from .base import BaseProvider, ProviderHealth, ProviderProbeResult
 from .registry import register
 
 
@@ -44,6 +44,29 @@ class DeterministicProvider(BaseProvider):
     # ``name`` is set by ``register``; declare a default for type
     # checkers that don't follow decorator side-effects.
     name: str = "deterministic"
+
+    def probe(self) -> ProviderProbeResult:
+        """Deterministic has no remote endpoint — probe is not applicable.
+
+        Distinct from :meth:`health_check` (which always returns
+        ``healthy=True`` for this provider, since "ready to run"
+        requires only the on-disk extractors). ``probe()`` would be
+        a network round-trip to a remote model-listing endpoint;
+        deterministic has no such endpoint, so we raise
+        :class:`NotImplementedError` and let the CLI top-level
+        handler convert it to ``ProviderProbeError(reason=
+        "not_implemented")`` and exit ``1``.
+
+        Operators who want a "is my model config wired right?" signal
+        against the deterministic path should call ``planner
+        validate`` on a sample run instead — that path is local,
+        deterministic, and free of any network surface.
+        """
+        raise NotImplementedError(
+            "DeterministicProvider.probe is not applicable: "
+            "deterministic has no remote endpoint. Use "
+            "`planner validate` for a local model-config check."
+        )
 
     def build_bibles(
         self,

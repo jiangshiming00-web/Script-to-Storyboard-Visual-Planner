@@ -21,12 +21,22 @@ Commands
 ``planner export``
     Render a run (or batch) as Markdown / HTML / CSV for human review.
 
-All commands take ``--env development|production`` as a required flag.
+``planner provider-probe``
+    Opt-in network reachability / sanity probe for one provider
+    (Phase 3 P2 probe design — see ``docs/design/
+    provider_probe_design.md``). Both this subcommand AND the
+    env var ``PLANNER_PROBE=1`` must be active; missing either
+    exits ``2`` with a one-line stderr policy refusal, zero
+    network calls.
+
+All commands except ``provider-probe`` take
+``--env development|production`` as a required flag.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -34,7 +44,7 @@ from typing import Optional
 import click
 
 from .env import PlannerConfig, is_inside_repo, load_config
-from .exceptions import EnvironmentBoundaryError, PlannerError
+from .exceptions import EnvironmentBoundaryError, PlannerError, ProviderProbeError
 from .pipeline import run as run_pipeline
 from .validate import ValidationReport, validate_run
 
@@ -43,6 +53,11 @@ from .validate import ValidationReport, validate_run
 # below; the add_command call happens just after @cli.group is
 # defined below.
 from .agent.cli import agent_group
+
+# Probe subcommand support (Phase 3 P2).
+from .agent.redact import redact_secrets_text
+from .providers import get_provider as _providers_get_provider
+from .providers.base import ProviderProbeResult
 
 
 def _resolve_project_root(ctx: click.Context) -> Path:
@@ -283,6 +298,187 @@ def validate_cmd(env: str, run_dir: Path) -> None:
         sys.exit(0)
     click.echo(click.style("✖ Validation failed.", fg="red"), err=True)
     sys.exit(1)
+
+
+# --- provider-probe subcommand (Phase 3 P2) ------------------------------
+
+
+_PROBE_ENV_VAR = "PLANNER_PROBE"
+
+
+def _probe_gate_open() -> bool:
+    """Single-point gate: env var must equal exactly ``"1"``.
+
+    Distinct from CLI invocation: the subcommand body calls this and
+    decides what to do based on the boolean. A ``False`` return
+    triggers a one-line stderr policy refusal and exits ``2`` —
+    matching the brief ``docs/design/provider_probe_design.md`` §2.3
+    exit code table and matching the ``_production_locked_keys``
+    "rejected loudly" style.
+
+    Anything other than ``"1"`` (unset, ``""``, ``"0"``, ``"true"``,
+    ``"yes"``, typos) closes the gate. We deliberately do NOT accept
+    multiple truthy spellings — strict exact match makes the contract
+    easy to audit ("is the env var exactly 1?") and prevents
+    accidental alias-driven probes from sneaking through.
+    """
+    return os.environ.get(_PROBE_ENV_VAR) == "1"
+
+
+@cli.command(name="provider-probe")
+@click.option(
+    "--provider",
+    default=None,
+    help=(
+        "Provider name to probe. Defaults to the configured "
+        "planner_provider (loaded from model_config.json if present, "
+        "else 'deterministic')."
+    ),
+)
+@click.option(
+    "--model-config",
+    "model_config_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Explicit path to a v1.0 model config JSON. Used when probing "
+        "'openai_compatible' so the configured base_url / api_key_env "
+        "are visible to the probe endpoint."
+    ),
+)
+@click.option(
+    "--timeout-ms",
+    default=5000,
+    type=int,
+    help="Probe outer timeout in milliseconds (default 5000).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Surface the full details dict (still redacted) in the JSON.",
+)
+@click.pass_context
+def provider_probe_cmd(
+    ctx: click.Context,
+    provider: Optional[str],
+    model_config_path: Optional[Path],
+    timeout_ms: int,
+    verbose: bool,
+) -> None:
+    """Opt-in network reachability / sanity probe for one provider.
+
+    AND-gate: this subcommand AND env var ``PLANNER_PROBE=1`` must
+    BOTH be active. Missing either → exit ``2`` with one-line
+    stderr policy refusal; zero network calls. The gate is
+    enforced by :func:`_probe_gate_open` BEFORE we touch any
+    registry / config — so even aliased shells can't bypass it.
+
+    Exit codes (per brief §2.3):
+
+    * ``0`` — probe ran; ``healthy=True`` in the result.
+    * ``1`` — adapter raised ``NotImplementedError`` (deterministic /
+      openai skeleton / anthropic skeleton — feature absent, NOT a
+      network failure).
+    * ``2`` — gate closed; OR probe returned ``healthy=False`` (DNS /
+      TCP / TLS / timeout / 4xx / 5xx). Treated as operator-actionable
+      "tried but unreachable".
+    """
+    if not _probe_gate_open():
+        # Manual one-line stderr policy refusal. Click's
+        # ``UsageError`` default rendering prints multi-line usage +
+        # help text, which is unfriendly for CI / monitoring. The
+        # brief mandates a strict one-line stderr so observability
+        # tooling can grep for the policy refusal pattern; we exit
+        # 2 explicitly via ``ctx.exit`` so the Click machinery does
+        # not append usage.
+        click.echo(
+            f"provider probe is opt-in only. Set {_PROBE_ENV_VAR}=1 in "
+            "the environment AND invoke `planner provider-probe` "
+            "explicitly. Refusing to issue any network call without "
+            "explicit consent.",
+            err=True,
+        )
+        ctx.exit(2)
+
+    # Resolve the provider + settings. We deliberately do NOT call
+    # ``health_check`` here — strict separation per brief §2.7. We
+    # only need the registry to pick the class; the settings come
+    # from the model config when the chosen provider is
+    # ``openai_compatible`` (or any future adapter that consumes
+    # ``ProviderRuntimeSettings``).
+    if provider is None:
+        model_config = _load_model_config_for_cli(model_config_path)
+        if model_config is not None:
+            provider = model_config.planner_provider
+        else:
+            provider = "deterministic"
+
+    settings = None
+    if provider == "openai_compatible":
+        # Real adapter needs the configured settings (base_url,
+        # api_key_env, etc.). Resolve from model_config or from
+        # defaults. Other providers accept and ignore settings.
+        model_config = _load_model_config_for_cli(model_config_path)
+        if model_config is not None:
+            from .model_config import resolve_runtime_settings
+
+            settings = resolve_runtime_settings(
+                model_config, provider_name=provider
+            )
+
+    try:
+        instance = _providers_get_provider(provider, settings=settings)
+        result = instance.probe()
+    except NotImplementedError as exc:
+        # Adapter declared "I don't implement probe" (e.g. skeleton).
+        # The brief §2.3 maps this to exit 1 with a structured one-
+        # line reason; we wrap via ProviderProbeError so the CLI top
+        # of stack stays consistent with the gate-closed path.
+        msg = redact_secrets_text(str(exc))
+        click.echo(
+            f"provider probe not implemented for {provider!r}: {msg}",
+            err=True,
+        )
+        sys.exit(1)
+    except ProviderProbeError as exc:
+        # Adapter raised a typed provider-probe error (rare — most
+        # failures come back as unhealthy ProbeResult, not raise).
+        click.echo(
+            f"probe failed for {provider!r}: {redact_secrets_text(str(exc))}",
+            err=True,
+        )
+        sys.exit(2)
+    except PlannerError as exc:
+        # Any other planner-domain exception (ConfigError, etc.).
+        click.echo(
+            f"planner error probing {provider!r}: "
+            f"{redact_secrets_text(str(exc))}",
+            err=True,
+        )
+        sys.exit(2)
+
+    # Print the structured result to stdout (JSON, one line) so
+    # downstream tooling can parse. Always redact every string field
+    # before formatting.
+    payload: dict = {
+        "provider": result.name,
+        "healthy": bool(result.healthy),
+        "reason": redact_secrets_text(result.reason or ""),
+    }
+    if result.latency_ms is not None:
+        payload["latency_ms"] = int(result.latency_ms)
+    if verbose and result.details:
+        payload["details"] = {
+            k: redact_secrets_text(str(v)) for k, v in result.details.items()
+        }
+    click.echo(json.dumps(payload, ensure_ascii=False))
+
+    if result.healthy:
+        sys.exit(0)
+    # Tried but failed (DNS / TCP / TLS / 4xx / 5xx / timeout).
+    sys.exit(2)
 
 
 def main() -> None:

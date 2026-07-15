@@ -102,6 +102,21 @@ class _UnhealthyStubProvider(BaseProvider):
             details={"stub": "true"},
         )
 
+    def probe(self):  # type: ignore[override]
+        """Stub plugin has no remote endpoint; mirror the
+        ``BaseProvider.probe`` default raise so ``get_provider`` can
+        instantiate this class for the swap-and-audit exercise.
+
+        See :class:`tests.test_providers._EchoProvider.probe` for the
+        rationale — adding a new abstract method to
+        :class:`BaseProvider` must not silently regress the
+        ``registry accepts third-party subclasses`` happy path.
+        """
+        raise NotImplementedError(
+            "_UnhealthyStubProvider.probe is a smoke-test stub; "
+            "deterministic / skeleton adapters keep the default raise."
+        )
+
     def build_bibles(self, script_text, *, script_id="sample"):
         return get_provider("deterministic").build_bibles(
             script_text, script_id=script_id
@@ -632,6 +647,9 @@ def test_unregister_helper_removes_provider() -> None:
             raise NotImplementedError
 
         def compile_video_prompts(self, *args, **kwargs):  # pragma: no cover
+            raise NotImplementedError
+
+        def probe(self):  # type: ignore[override]
             raise NotImplementedError
 
     from planner.providers import get_provider as _gp

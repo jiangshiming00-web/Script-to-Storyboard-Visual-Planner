@@ -266,6 +266,27 @@ class _EchoProvider(BaseProvider):
             reason="smoke plugin delegates to deterministic",
         )
 
+    def probe(self):  # type: ignore[override]
+        """Smoke plugin has no remote endpoint; mirror the
+        ``BaseProvider.probe`` default raise.
+
+        Phase 3 P2 added ``probe()`` as an abstract method on
+        :class:`BaseProvider`. The deterministic / skeleton adapters
+        (real production code) keep the default raise so the CLI
+        top-level handler can convert the
+        ``NotImplementedError`` into a structured
+        ``ProviderProbeError(reason="not_implemented")`` + exit ``1``.
+        Test plugins that exercise the happy-path plumbing of
+        ``get_provider`` should mirror this stance so that adding a
+        new ``BaseProvider`` abstract method does not silently
+        regress the registry contract.
+        """
+        raise NotImplementedError(
+            "_EchoProvider.probe is a smoke-test stub; the Phase 3 P2 "
+            "probe design lands ``probe()`` as opt-in only and this "
+            "test plugin follows the deterministic / skeleton pattern."
+        )
+
 
 def test_registered_plugin_can_be_selected_via_config(
     project_root: Path, sample_script_path: Path, tmp_path: Path

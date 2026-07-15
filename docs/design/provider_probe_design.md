@@ -167,12 +167,19 @@ def provider_probe_cmd(ctx: click.Context, provider: Optional[str],
     zero network calls.
     """
     if not _probe_gate_open():
-        raise click.UsageError(
+        # Manual one-line stderr policy refusal. Click's ``UsageError``
+        # default rendering prints multi-line usage + help text, which
+        # is unfriendly for CI / monitoring. The brief mandates a
+        # **strict one-line** stderr so observability tooling can grep
+        # for the policy refusal pattern; we exit 2 explicitly via
+        # ``ctx.exit`` so the Click machinery does not append usage.
+        click.echo(
             "provider probe is opt-in only. Set PLANNER_PROBE=1 in the "
             "environment AND invoke `planner provider-probe` explicitly. "
             "Refusing to issue any network call without explicit consent.",
-            ctx=ctx,
+            err=True,
         )
+        ctx.exit(2)
     ...
 ```
 
@@ -345,7 +352,7 @@ CLI 顶层 `try/except PlannerError` 包住 → `ProviderProbeError(reason="not_
 
 ## 4. Test 范围
 
-### 4.1 单元测试 (`tests/test_provider_probe.py`，预计 +14 tests)
+### 4.1 单元测试 (`tests/test_provider_probe.py`，预计 +18 unit tests)
 
 | 测试 | 覆盖 |
 |---|---|
@@ -368,7 +375,7 @@ CLI 顶层 `try/except PlannerError` 包住 → `ProviderProbeError(reason="not_
 | `test_probe_does_not_modify_provider_health` | probe 跑过 → `provider.health` dict 与之前 byte-identical |
 | `test_probe_does_not_depend_on_health_check_call_path` | assert `health_check` 内部不调 `probe`，反之亦然（静态 + runtime） |
 
-### 4.2 CLI 测试 (`tests/test_cli_provider_probe.py`，预计 +8 subprocess)
+### 4.2 CLI 测试 (`tests/test_cli_provider_probe.py`，预计 +10 subprocess)
 
 | 测试 | 覆盖 |
 |---|---|
@@ -450,8 +457,8 @@ must not be called")`，跑 CLI，确认 exit 2 + patch 失败从未触发）。
    - `planner/providers/__init__.py`：re-export `ProviderProbeResult` /
      `ProviderProbeError`
 2. **Round 2 (测试 + harness)**：
-   - `tests/test_provider_probe.py` +14 unit（含 5 endpoint 守卫）
-   - `tests/test_cli_provider_probe.py` +8 cli（含 4 exit code 分发表）
+   - `tests/test_provider_probe.py` +18 unit（含 4 endpoint 守卫 + 3 env gate + 11 其它覆盖）
+   - `tests/test_cli_provider_probe.py` +10 cli（含 4 distinct exit code 表 + 1 no-`--probe`-flag 守卫 + 5 其它覆盖）
    - `harness/agent_scenarios/provider_probe_opt_in.json` + `..._gate_closed.json`
    - `harness/agent_scenarios/run_all.py` 加 2 个新 scenario 入口（总计 7 → 9）
 3. **Round 3 (三件套 + Codex 复审 + push)**：

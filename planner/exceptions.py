@@ -49,3 +49,29 @@ class ProviderOutputError(PlannerError):
     error message should include the provider / model / step and a
     truncated excerpt of the offending payload (never the API key).
     """
+
+
+class ProviderProbeError(PlannerError):
+    """Raised when a provider probe (operator-initiated, opt-in
+    network reachability check) fails or is not implemented.
+
+    Distinct from :class:`ProviderUnavailableError` (which gates
+    pipeline selection at run time) and :class:`ProviderOutputError`
+    (which gates response parsing). ``probe()`` failure modes:
+
+    * adapter raises ``NotImplementedError`` (skeleton / no remote
+      endpoint) — CLI top-level catches and wraps to
+      ``ProviderProbeError(reason="not_implemented")`` → **exit 1**.
+    * adapter reachable but unhealthy (HTTP 4xx/5xx / DNS / timeout)
+      — adapter returns ``ProviderProbeResult(healthy=False)``;
+      CLI exits **2** (no exception raised).
+    * subcommand invoked without env gate set — CLI emits a
+      one-line stderr policy refusal and exits **2** (``ctx.exit(2)``,
+      NOT ``Click.UsageError`` which would print multi-line usage).
+
+    Caught by the CLI ``provider-probe`` subcommand's
+    ``try/except PlannerError`` so the user sees the structured
+    message rather than a Python traceback. Never bundled with the
+    pipeline's run-time selection logic — probe is off the
+    hot path.
+    """

@@ -59,7 +59,7 @@ from ..schema import (
     StoryBeat,
     VideoPrompts,
 )
-from .base import BaseProvider, ProviderHealth
+from .base import BaseProvider, ProviderHealth, ProviderProbeResult
 from .openai_compatible_adapter import ALIGNMENT_HINT
 from .registry import register
 
@@ -122,7 +122,34 @@ class AnthropicProvider(BaseProvider):
     #: Default for type checkers; ``register`` overrides at import.
     name: str = "anthropic"
 
+    def probe(self) -> ProviderProbeResult:
+        """Phase-1 skeleton: probe is intentionally not implemented.
+
+        Mirror of :meth:`OpenAIProvider.probe`: even with
+        ``PLANNER_ANTHROPIC_API_KEY`` configured and the optional
+        ``anthropic`` SDK installed, the Phase-1 implementation gate
+        keeps the planning methods raising
+        :class:`NotImplementedError`, and we mirror that stance for
+        ``probe()``.
+
+        Anthropic has no Messages-API Chat-Completions endpoint to
+        model-list against without a paid call, so an opt-in
+        network probe is genuinely N/A here until the future
+        ``anthropic_messages_adapter`` lands. CLI top-level handler
+        catches the exception, wraps to
+        ``ProviderProbeError(reason="not_implemented")``, exits ``1``.
+        """
+        raise NotImplementedError(
+            "AnthropicProvider.probe is intentionally not implemented "
+            "in the Phase-1 skeleton. Anthropic has no cheap "
+            "model-listing endpoint to probe against without a paid "
+            "Messages call; configure provider='openai_compatible' for "
+            "opt-in network probes against OpenAI-shape endpoints."
+            + ALIGNMENT_HINT
+        )
+
     def health_check(self) -> ProviderHealth:
+        """Return the local-only readiness state for the Anthropic adapter."""
         details: Dict[str, str] = {
             "phase": "1-skeleton",
             "real_calls": "disabled",

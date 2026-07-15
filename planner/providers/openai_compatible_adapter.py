@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
@@ -64,7 +65,7 @@ from ..schema import (
     StoryBeat,
     VideoPrompts,
 )
-from .base import BaseProvider, ProviderHealth
+from .base import BaseProvider, ProviderHealth, ProviderProbeResult
 from .registry import register
 
 
@@ -111,6 +112,43 @@ def _default_http_post(
 #: Module-level handle so tests can monkeypatch the HTTP layer.
 http_post: Callable[[str, Dict[str, str], bytes, float], Tuple[int, bytes]] = (
     _default_http_post
+)
+
+
+def _default_http_get(
+    url: str,
+    headers: Dict[str, str],
+    timeout: float,
+) -> Tuple[int, bytes]:
+    """Default HTTP GET using :mod:`urllib.request`.
+
+    Returns ``(status_code, body_bytes)``. Same contract as
+    :func:`_default_http_post`: ``HTTPError`` is converted to
+    ``(exc.code, exc.read() or b"")`` so the caller can distinguish
+    4xx from 5xx and surface the body in the result. ``timeout`` is
+    in seconds.
+
+    .. note::
+
+       Signature mirrors ``_default_http_post`` minus the ``body``
+       positional; tests can monkeypatch this with a fake-server
+       style fixture the same way they monkeypatch the POST helper
+       (``tests/test_provider_probe.py`` Round 2).
+    """
+
+    from urllib import request as _urlreq
+
+    req = _urlreq.Request(url=url, headers=headers, method="GET")
+    try:
+        with _urlreq.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except _urlreq.HTTPError as exc:  # pragma: no cover - depends on server
+        return exc.code, exc.read() or b""
+
+
+#: Module-level handle so tests can monkeypatch the GET layer.
+http_get: Callable[[str, Dict[str, str], float], Tuple[int, bytes]] = (
+    _default_http_get
 )
 
 
@@ -311,6 +349,111 @@ class OpenAICompatibleProvider(BaseProvider):
         self._settings = settings
 
     # --- health check -------------------------------------------------
+
+    def probe(self) -> ProviderProbeResult:
+        """Opt-in network reachability probe.
+
+        Implements the brief ``docs/design/provider_probe_design.md``
+        §2.5 endpoint contract: ``GET {settings.base_url.rstrip("/")}/
+        models``. Mirrors the runtime chat-completion join at line 431
+        (``settings.base_url.rstrip("/") + "/chat/completions"``) so
+        the same rstrip handles default OpenAI URLs
+        (``https://api.openai.com/v1``) and Ollama/vLLM-style URLs
+        (``http://localhost:11434/v1``) without doubling ``/v1``.
+
+        Lifecycle:
+
+        1. Resolve ``settings`` via :meth:`_require_settings`
+           (raises if provider was instantiated without explicit
+           settings — the CLI never hits this path because it
+           builds settings from the model config first).
+        2. Issue one HTTPS GET to the model-listing endpoint with a
+           5-second socket timeout. Network-level failures (DNS,
+           TCP, TLS, timeout) are caught and returned as
+           ``ProviderProbeResult(healthy=False)`` — **not** raised,
+           so the CLI exits ``2`` with a structured reason instead
+           of a Python traceback.
+        3. HTTP 4xx / 5xx → ``healthy=False`` with the status code
+           and a redacted body excerpt in ``reason``.
+        4. HTTP 2xx → ``healthy=True`` with optional ``latency_ms``.
+
+        Strict-separation invariants (brief §2.7):
+
+        * ``health_check`` is NOT called here — we go straight to
+          ``_require_settings`` to skip the always-on gate.
+        * No on-disk side effects (no ``run_summary.json`` writes).
+        * Every string field goes through :func:`_redact_secrets`
+          before reaching ``reason`` / ``details``. The
+          ``Authorization: Bearer <key>`` header is included in the
+          request only — it is **not** echoed back into the result
+          (only ``api_key_env`` — the env-var **name** — appears).
+
+        Module-level :data:`http_get` is the seam tests use to fake
+        a server; this method never invents a hard-coded
+        ``urllib.request.urlopen`` call.
+        """
+        settings = self._require_settings()
+        url = settings.base_url.rstrip("/") + "/models"
+
+        # Probe outer timeout: 5 seconds is the brief §2.2 default.
+        # A separate CLI-level timeout is also exposed via
+        # ``--timeout-ms`` so an operator can tighten this further.
+        # Defense in depth: 5s at the URLopen level too, so a
+        # wedged DNS resolution cannot hang the CLI.
+        timeout_seconds = 5.0
+
+        headers = {
+            "Authorization": f"Bearer {settings.api_key() or ''}",
+        }
+
+        started = time.monotonic()
+        try:
+            status_code, body = http_get(url, headers, timeout_seconds)
+        except Exception as exc:  # pragma: no cover - depends on host
+            return ProviderProbeResult(
+                name=self.name,
+                healthy=False,
+                reason=(
+                    f"probe request to {url} raised "
+                    f"{type(exc).__name__}: {_redact_secrets(repr(exc))}"
+                ),
+                details={
+                    "endpoint": url,
+                    "error_type": type(exc).__name__,
+                    "api_key_env": settings.api_key_env,
+                },
+            )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        redacted_body = _redact_secrets(
+            body.decode("utf-8", errors="replace")
+        )
+        if 200 <= status_code < 300:
+            return ProviderProbeResult(
+                name=self.name,
+                healthy=True,
+                reason=f"GET {url} returned {status_code}",
+                latency_ms=elapsed_ms,
+                details={
+                    "endpoint": url,
+                    "http_status": str(status_code),
+                    "api_key_env": settings.api_key_env,
+                },
+            )
+        return ProviderProbeResult(
+            name=self.name,
+            healthy=False,
+            reason=(
+                f"GET {url} returned {status_code}; "
+                f"body excerpt: {redacted_body[:120]!r}"
+            ),
+            latency_ms=elapsed_ms,
+            details={
+                "endpoint": url,
+                "http_status": str(status_code),
+                "api_key_env": settings.api_key_env,
+            },
+        )
 
     def health_check(self) -> ProviderHealth:
         """Local-only readiness for the OpenAI-compatible adapter.
