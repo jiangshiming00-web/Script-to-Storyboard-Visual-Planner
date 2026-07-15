@@ -2,6 +2,90 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-15 (Proma Phase 3 P2 prep - provider probe design brief round-2 fix)
+
+Codex manual review of probe round-1 brief (`4121276`) verdict **暂不建议进入实现 Round 1**——2 P1 + 1 P2 + 1 P3 全是直接落地的阻断。本轮按"4 finding 全部收口 + brief 入库"模式 commit。0 代码改动。
+
+### Findings → Fixes（4 条全部收口）
+
+#### P1-1（修齐 endpoint 双 `/v1` 拼接）
+
+**Bug**：round-1 brief §3 写 `GET {base_url}/v1/models`，但 `planner/model_config.py:68` 默认 `base_url="https://api.openai.com/v1"` 已含 `/v1`；现有 `openai_compatible_adapter.py:431` 用 `settings.base_url.rstrip("/") + "/chat/completions"` 模式（**不**写死 `/v1` 前缀）。按 round-1 文本实现，`/v1` 会拼两次：`https://api.openai.com/v1/v1/models`。
+
+**Fix**（round-2 brief §2.5 + §4.1）：
+- Endpoint 模板：`{settings.base_url.rstrip("/")}/models`（mirror 现有 adapter 拼接模式，与 `model_config._http_only` validator `rstrip("/")` 行为一致）。
+- 4 个 endpoint pinning 测试（`tests/test_provider_probe.py`）：
+  - 默认 OpenAI URL → `https://api.openai.com/v1/models`（**不**是 `/v1/v1/models`）
+  - Ollama `localhost:11434/v1` → `:11434/v1/models`
+  - vLLM `host:8000/v1` → `:8000/v1/models`
+  - `base_url` 末尾多余 `/` → rstrip 吃掉
+
+#### P1-2（brief 落点移入库）
+
+**Bug**：round-1 brief 落 `~/.proma/agent-workspaces/.../workspace-files/.context/plan/probe_design.md`，是 workspace ephemeral 路径，未来 Codex/Proma/Zcode 会话无法稳定定位。
+
+**Fix**：
+- 新 brief 写到 **`docs/design/provider_probe_design.md`** 并入库（committed to git）。
+- `docs/design/` 是新增子目录（commit 时 `mkdir -p` 一起跟踪）。
+- 旧 ephemeral brief 在新 brief §0 Reading Order 显式标注为"archived"。
+- 三件套指向新路径。
+
+#### P2（统一 CLI trigger / env gate / exit code 语义）
+
+**Bug**：round-1 brief §2.2 / §2.3 / §2.6 / §3 / §4.2 自相矛盾：
+1. 一处要求顶级子命令 `planner provider-probe`、另一处又要求 `planner run --probe` flag
+2. `gate closed` 行为 一处写 `exit 0 + stderr NOTE`、示例代码却 `click.UsageError`（Click 默认 exit 2）
+3. `ProviderProbeError` docstring 写"exit code 2 = policy refusal; 1 = healthy=False"，与 §2.3 表格"exit 2 = unhealthy"反着
+
+**Fix**（采纳 Codex 建议；round-2 brief §2.2 + §2.3 + §4.2）：
+- **删 `--probe` flag**：probe 触发仅通过顶级子命令 `planner provider-probe`（用户主动调用即显式 trigger；无 alias 误触面；与 `planner run` / `validate` / `batch` 同级）。
+- **env gate**：`PLANNER_PROBE=1`（改名自原 `PLANNER_PROVIDER_PROBE` 短版）；env 开 + 子命令触发 = AND 双开。
+- **统一退出码表**：
+  - 子命令触发 + env 未开 → **exit 2** policy refusal（`click.UsageError`）
+  - `NotImplementedError`（adapter 没实现）→ CLI 包成 `ProviderProbeError(reason="not_implemented")` → **exit 1**
+  - `probe()` 返回 `healthy=False`（已发请求，对端拒绝）→ **exit 2**
+  - `probe()` 返回 `healthy=True` → **exit 0**
+  - `probe()` raise 非 PlannerError → 既有 traceback 入 stderr（不破线）
+- 删除 §2.6 Gate 行的"AND `--probe` flag" 列；表格改成"顶级子命令 + env `PLANNER_PROBE=1` 双开"。
+- §4.2 CLI 测试新增 `test_provider_probe_subprocess_subcommand_required_no_alias` 锁"无 `--probe` flag" contract。
+
+#### P3（状态/文案漂移）
+
+**Bug**：
+1. `PROJECT_STATUS.json:235` 仍有 `phase3_p2_diagnose_continuity_audit_codex_manual_re_review_pending`，但该 round 已在 `4426c14` PASS（你看到的"427 passed"那轮）。stale。
+2. `CHANGELOG.md:13` 写 `PlannerProbeError`（typo），brief / HANDOFF / PROJECT_STATUS 全部用 `ProviderProbeError`。
+
+**Fix**：
+- `PROJECT_STATUS.json::next_actions` 删 stale 一行；与已 PASS 的 round 对齐。
+- `CHANGELOG.md:13` 改成 `ProviderProbeError(PlannerError)`。
+- 全文（brief + CHANGELOG + HANDOFF + PROJECT_STATUS）统一到 `ProviderProbeError` 类名。
+
+### 红线守门
+
+- 0 代码 / 0 测试改动。`python3 -m pytest`：仍 **431 passed**（与 `4426c14` `4121276` 一致）。
+- `python3 -m json.tool PROJECT_STATUS.json`：通过。
+- `git diff --check HEAD`：clean。
+- `git status`：working tree clean 后只含本轮 doc + brief commit。
+- 新 brief 入库到 `docs/design/provider_probe_design.md`，与原 archived workspace-files 路径双指针（§0 Reading Order 标注）。
+
+### 验证
+
+- `python3 -m pytest` -- **431 passed**（与 `4121276` 一致，无回归）
+- `python3 -m json.tool PROJECT_STATUS.json` -- 通过
+- `git diff --check HEAD` -- 通过
+- `git status` -- clean（仅 1 个新增 brief 文件 + 三件套改动）
+- class name 跨 4 文件 8 处一致：`ProviderProbeError(PlannerError)`（CHANGELOG/HANDOFF/brief/PROJECT_STATUS）
+- next_actions 清理后只剩 11 条；既有 `..._codex_design_review_pending`（本 round）保持最高优先级
+
+### 不做（brief 阶段留 Round 1）
+
+- **不动** `planner/providers/base.py` / `planner/exceptions.py` / `planner/cli.py`
+- **不动** `planner/providers/{openai_compatible,openai,anthropic,deterministic}_adapter.py`
+- **不动** `planner/providers/registry.py` / `planner/agent/redact.py`
+- **不动** `pyproject.toml`
+- **不动** `tests/` / `harness/`
+- **不动** `docs/PROMA_EXECUTION_BRIEF.md`
+
 ## 2026-07-15 (Proma Phase 3 P2 prep - provider probe design brief landed, awaiting Codex design review)
 
 按 user 拍板从 `next_actions[0]` 启动 probe 设计阶段。Scope 严格限定为**design brief**——本轮 0 代码修改，0 测试新增。Implementation 等 brief 通过 Codex 设计复审后再启动 Round 1。
@@ -10,7 +94,7 @@
 
 - **`workspace-files/.context/plan/probe_design.md`**（8 KB 设计契约）：
   - **TL;DR**：给 `BaseProvider` 加 `probe()` opt-in 网络可达性探测，由 **CLI `--probe` × `PLANNER_PROVIDER_PROBE=1` env** 双开才生效；其余一律 `NotImplementedError`。probe 严格不写 `run_summary.json` / 不修改 `ProviderHealth` / 不被 `health_check()` 调用。三者完全解耦。
-  - **Goals（G1-G8）**：8 条量化验收信号，覆盖抽象方法、双重 gate、默认 raise、零写入、`PlannerProbeError(PlannerError)` 异常族、`redact_secrets_text` 4 regex 复用、不进 `[project]` 必需依赖。
+  - **Goals（G1-G8）**：8 条量化验收信号，覆盖抽象方法、双重 gate、默认 raise、零写入、`ProviderProbeError(PlannerError)` 异常族、`redact_secrets_text` 4 regex 复用、不进 `[project]` 必需依赖。
   - **2.1 `BaseProvider.probe()` 抽象**：与 `health_check()` 对称的 ABC 方法；默认 raise `NotImplementedError`；同接口同私有约束。
   - **2.2 入口控制**：`_probe_gate_open()` 单点判定 `PLANNER_PROVIDER_PROBE == "1"`；CLI `--probe` 是 trigger、env 是 gate，两者**取 AND**——避免 alias / `.bashrc` 误触导致 0 默认付费泄漏。
   - **2.3 失败语义**：`ProviderProbeError(reason="not_implemented")` exit 1；`healthy=False` exit 2；CLI 顶层 `try/except PlannerError` 捕获，非 PlannerError 沿用既有 traceback 入 stderr 行为。

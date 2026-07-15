@@ -1,6 +1,57 @@
 # Handoff
 
-## 当前状态（2026-07-15 - provider probe design brief landed，等 Codex 设计复审过审后启动实现 Round 1）
+## 当前状态（2026-07-15 - provider probe design brief round-2 fix landed，等 Codex 设计复审二审后启动实现 Round 1）
+
+按 Codex manual review of round-1 brief (`4121276`) 的 4 findings（2 P1 + 1 P2 + 1 P3）全部收口，brief round-2 supersede round-1 入库到 `docs/design/provider_probe_design.md`。0 代码改动。
+
+### Round-2 修了什么（4 finding 全部收口）
+
+| Finding | 修法 | 位置 |
+|---|---|---|
+| **P1-1** endpoint 双 `/v1` 拼接（`base_url` 已含 `/v1`） | `GET {settings.base_url.rstrip("/")}/models`，mirror `openai_compatible_adapter.py:431` 现有模式 | brief §2.5 + §4.1 |
+| **P1-2** brief 落 ephemeral workspace-files 路径 | brief 入库到 **`docs/design/provider_probe_design.md`**；round-1 旧文件 archived | brief §0 Reading Order |
+| **P2** CLI / env gate / exit code 互打架 | 删 `--probe` flag（顶级子命令即 trigger）；AND gate 收缩到 `subcommand × env=1`；统一 exit 表（gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0） | brief §2.2 + §2.3 + §4.2 |
+| **P3** `next_actions` stale + 类名漂移 | 删 `diagnose_continuity_audit_codex_manual_re_review_pending`；全文统一 `ProviderProbeError` | CHANGELOG/HANDOFF/brief/PROJECT_STATUS |
+
+### brief round-2 路径
+
+- **新（入库）**：`docs/design/provider_probe_design.md`（committed to git，作为下一轮 review/implementation 主交付物）
+- **旧（archived）**：`~/.proma/agent-workspaces/.../workspace-files/.context/plan/probe_design.md`（workspace ephemeral，brief §0 Reading Order 标注）
+
+### 三件套 sync（本 commit 一并）
+
+- `CHANGELOG.md` 顶部加 round-2 条目；4 finding 全部收口记录 + 红线守门
+- `HANDOFF.md` 顶部章节更新指向新路径 + round-2 修复列表
+- `PROJECT_STATUS.json`：`next_actions` 删 stale；verification 加 round-2 行
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动。
+- 0 代码 / 0 测试修改。pytest **431 passed**（与 `4121276` 一致，0 回归）。
+- 仓库 `runs/` 仍只含 `.gitkeep`。
+- `docs/design/` 是新目录；与既有 `docs/ARCHITECTURE.md` / `docs/GUI.md` 同级。
+
+### 下一轮
+
+- **Codex 设计复审 probe brief round-2**（重点看）：
+  1. §2.5 endpoint 拼接契约 `rstrip + /models` 是否覆盖默认 OpenAI / Ollama / vLLM 4 个用例
+  2. §2.3 exit code 表（gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0）是否清晰无歧义
+  3. §2.2 顶级子命令 vs `--probe` flag 的取舍论据（alias 不污染 + 退出码语义清晰 + 与 CI 守卫对齐）
+  4. §4.2 exit code 测试覆盖（10 个 CLI 测试 + 4 endpoint 守卫测试）
+  5. §3 adapter scope（openai / anthropic skeleton 仍 raise NotImplementedError；与 Phase-1 implementation gate 对齐）
+  6. 三件套 + 三处 `ProviderProbeError` 类名一致
+- **Round 1 (过审后启动)**：`base.py` abstract + 4 adapter override + CLI 子命令
+- **Round 2**：18 tests + 2 harness scenarios
+- **Round 3**：三件套 + 三轮复审闭环 + push
+
+### 候补 next_actions（本轮通过 Codex 二审后再启动哪个）
+
+1. `phase3_p2_diagnose_continuity_audit_codex_manual_re_review_pending` → 本轮已删（已 PASS'd 在 `4426c14`）。
+2. `phase3_p2_provider_probe_design_brief_codex_design_review_pending` → 本 round。
+3. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` → 等 probe 落地后；GUI 面板可做"probe 状态 / 调用 probe" 按钮。
+4. `core3_add_planner_bible_merge_for_cross_episode_continuity` → 最大范围，独立 user-ack 启动。
+
+## 当前状态（2026-07-15 - Phase 3 P2 diagnose continuity-audit Codex 复审修复 P1 + P3 status cleanup，待 Codex 复审放行）
 
 按 user 拍板从 `next_actions[0]` 启动 probe 设计阶段。Scope 严格限定为 **design brief**——本轮 0 代码修改、0 测试新增；过审后启动 Round 1（实现）+ Round 2（测试 + harness）+ Round 3（三件套 + Codex 三轮复审 + push）。
 
