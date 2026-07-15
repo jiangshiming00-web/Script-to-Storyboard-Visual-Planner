@@ -350,7 +350,7 @@ class OpenAICompatibleProvider(BaseProvider):
 
     # --- health check -------------------------------------------------
 
-    def probe(self) -> ProviderProbeResult:
+    def probe(self, *, timeout_ms: int = 5000) -> ProviderProbeResult:
         """Opt-in network reachability probe.
 
         Implements the brief ``docs/design/provider_probe_design.md``
@@ -368,8 +368,9 @@ class OpenAICompatibleProvider(BaseProvider):
            settings — the CLI never hits this path because it
            builds settings from the model config first).
         2. Issue one HTTPS GET to the model-listing endpoint with a
-           5-second socket timeout. Network-level failures (DNS,
-           TCP, TLS, timeout) are caught and returned as
+           socket timeout driven by ``timeout_ms`` (default 5000ms
+           per brief §2.2). Network-level failures (DNS, TCP, TLS,
+           timeout) are caught and returned as
            ``ProviderProbeResult(healthy=False)`` — **not** raised,
            so the CLI exits ``2`` with a structured reason instead
            of a Python traceback.
@@ -383,7 +384,10 @@ class OpenAICompatibleProvider(BaseProvider):
           ``_require_settings`` to skip the always-on gate.
         * No on-disk side effects (no ``run_summary.json`` writes).
         * Every string field goes through :func:`_redact_secrets`
-          before reaching ``reason`` / ``details``. The
+          before reaching ``reason`` / ``details``. The URL itself
+          is redacted before reuse — operators sometimes wire a
+          gateway path or query string with a literal key, and the
+          endpoint must never echo that back. The
           ``Authorization: Bearer <key>`` header is included in the
           request only — it is **not** echoed back into the result
           (only ``api_key_env`` — the env-var **name** — appears).
@@ -394,13 +398,20 @@ class OpenAICompatibleProvider(BaseProvider):
         """
         settings = self._require_settings()
         url = settings.base_url.rstrip("/") + "/models"
+        # Redact the URL **before** any operator-visible field uses
+        # it. Operators can wire secrets directly into ``base_url``
+        # (a vLLM gateway path with the key baked in, a query
+        # string, etc.), so the endpoint echoed in ``reason`` /
+        # ``details`` MUST go through the same 4-regex
+        # ``_redact_secrets`` filter as body / header values. The
+        # raw ``url`` is still used for the actual HTTP request.
+        safe_url = _redact_secrets(url)
 
-        # Probe outer timeout: 5 seconds is the brief §2.2 default.
-        # A separate CLI-level timeout is also exposed via
-        # ``--timeout-ms`` so an operator can tighten this further.
-        # Defense in depth: 5s at the URLopen level too, so a
-        # wedged DNS resolution cannot hang the CLI.
-        timeout_seconds = 5.0
+        # Probe outer timeout: ``timeout_ms`` is the CLI-facing knob
+        # (brief §2.2 default 5000ms). Defense in depth: the value
+        # is applied at the URLopen level too, so a wedged DNS
+        # resolution cannot hang the CLI.
+        timeout_seconds = max(timeout_ms, 1) / 1000.0
 
         headers = {
             "Authorization": f"Bearer {settings.api_key() or ''}",
@@ -414,11 +425,11 @@ class OpenAICompatibleProvider(BaseProvider):
                 name=self.name,
                 healthy=False,
                 reason=(
-                    f"probe request to {url} raised "
+                    f"probe request to {safe_url} raised "
                     f"{type(exc).__name__}: {_redact_secrets(repr(exc))}"
                 ),
                 details={
-                    "endpoint": url,
+                    "endpoint": safe_url,
                     "error_type": type(exc).__name__,
                     "api_key_env": settings.api_key_env,
                 },
@@ -432,10 +443,10 @@ class OpenAICompatibleProvider(BaseProvider):
             return ProviderProbeResult(
                 name=self.name,
                 healthy=True,
-                reason=f"GET {url} returned {status_code}",
+                reason=f"GET {safe_url} returned {status_code}",
                 latency_ms=elapsed_ms,
                 details={
-                    "endpoint": url,
+                    "endpoint": safe_url,
                     "http_status": str(status_code),
                     "api_key_env": settings.api_key_env,
                 },
@@ -444,12 +455,12 @@ class OpenAICompatibleProvider(BaseProvider):
             name=self.name,
             healthy=False,
             reason=(
-                f"GET {url} returned {status_code}; "
+                f"GET {safe_url} returned {status_code}; "
                 f"body excerpt: {redacted_body[:120]!r}"
             ),
             latency_ms=elapsed_ms,
             details={
-                "endpoint": url,
+                "endpoint": safe_url,
                 "http_status": str(status_code),
                 "api_key_env": settings.api_key_env,
             },

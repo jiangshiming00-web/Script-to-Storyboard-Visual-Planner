@@ -554,6 +554,186 @@ def test_openai_compatible_canonical_base_urls_exposed() -> None:
     assert OFFICIAL_ANTHROPIC_BASE_URL == "https://api.anthropic.com"
 
 
+# ---- probe: HTTP layer + redaction (Round 1 Codex fix) ---------------
+
+
+class _FakeHttpGet:
+    """Captures ``http_get`` calls and returns a canned response.
+
+    Mirrors :class:`_FakeHttp` (which covers POST). Probe is a
+    one-shot GET to ``{base_url}/models``; tests inspect
+    ``self.requests`` (url / headers / timeout) and steer
+    ``self.status_code`` / ``self.body`` for the response.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list = []
+        self.status_code: int = 200
+        self.body: bytes = b"{}"
+
+    def get(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        timeout: float,
+    ) -> Tuple[int, bytes]:
+        self.requests.append(
+            {"url": url, "headers": dict(headers), "timeout": timeout}
+        )
+        return self.status_code, self.body
+
+
+@pytest.fixture
+def fake_http_get(monkeypatch) -> _FakeHttpGet:
+    fake = _FakeHttpGet()
+    monkeypatch.setenv("PLANNER_TEST_KEY", "sk-test-1234567890abcdef")
+    monkeypatch.setattr(oca_mod, "http_get", fake.get)
+    return fake
+
+
+def test_probe_redacts_secret_in_url_endpoint(
+    fake_http_get: _FakeHttpGet,
+) -> None:
+    """R14 Codex fix: probe MUST redact any secret embedded in the
+    ``base_url`` before echoing it via ``reason`` or
+    ``details["endpoint"]``. Operators occasionally wire a vLLM /
+    gateway URL that contains a literal API key (``sk-...`` token
+    in the path or query); echoing it back is a red-line leak.
+
+    The actual HTTP call still uses the raw URL (we still need to
+    reach the endpoint) — only the operator-visible fields are
+    scrubbed.
+    """
+
+    settings = ProviderRuntimeSettings(
+        name="openai_compatible",
+        base_url="https://example.com/v1/sk-probe-secret-1234567890",
+        model="probe-model",
+        api_key_env="PLANNER_TEST_KEY",
+        timeout_seconds=10.0,
+        temperature=0.5,
+        max_tokens=256,
+        enable_real_model_calls=True,
+    )
+    provider = OpenAICompatibleProvider(settings=settings)
+    result = provider.probe()
+
+    # Raw token MUST NOT appear in any operator-visible field.
+    assert "sk-probe-secret-1234567890" not in (result.reason or "")
+    assert "sk-probe-secret-1234567890" not in str(result.details)
+
+    # The request still went out to the raw URL (we still need to
+    # actually hit the endpoint).
+    assert len(fake_http_get.requests) == 1
+    assert (
+        fake_http_get.requests[0]["url"]
+        == "https://example.com/v1/sk-probe-secret-1234567890/models"
+    )
+
+    # Redaction replaced the token with the canonical placeholder
+    # in the operator-visible fields.
+    assert "<redacted>" in (result.reason or "")
+    assert "<redacted>" in result.details.get("endpoint", "")
+
+
+def test_probe_redacts_secret_in_unhealthy_path(
+    fake_http_get: _FakeHttpGet,
+) -> None:
+    """P1 also covers the unhealthy path: when ``http_get`` raises
+    or returns 4xx / 5xx, the URL echoed in ``reason`` /
+    ``details["endpoint"]`` MUST still be redacted.
+    """
+
+    fake_http_get.status_code = 401
+    settings = ProviderRuntimeSettings(
+        name="openai_compatible",
+        base_url="https://example.com/v1/sk-probe-secret-9876543210",
+        model="probe-model",
+        api_key_env="PLANNER_TEST_KEY",
+        timeout_seconds=10.0,
+        temperature=0.5,
+        max_tokens=256,
+        enable_real_model_calls=True,
+    )
+    provider = OpenAICompatibleProvider(settings=settings)
+    result = provider.probe()
+
+    assert result.healthy is False
+    assert "sk-probe-secret-9876543210" not in (result.reason or "")
+    assert "sk-probe-secret-9876543210" not in str(result.details)
+    assert "<redacted>" in (result.reason or "")
+
+
+def test_probe_uses_timeout_ms_kwarg(fake_http_get: _FakeHttpGet) -> None:
+    """P2 timeout fix: the CLI-facing ``--timeout-ms`` knob MUST
+    drive the socket-level timeout the adapter hands to ``http_get``.
+    Without this, the CLI option was documented as a contract but
+    silently ignored.
+    """
+
+    provider = OpenAICompatibleProvider(settings=_fully_configured_settings())
+    provider.probe(timeout_ms=2500)
+    assert len(fake_http_get.requests) == 1
+    # 2500 ms → 2.5 s at the URLopen level.
+    assert fake_http_get.requests[0]["timeout"] == pytest.approx(2.5)
+
+
+def test_probe_default_timeout_is_five_seconds(
+    fake_http_get: _FakeHttpGet,
+) -> None:
+    """Default ``timeout_ms`` is 5000ms (brief §2.2). The probe
+    works without the kwarg and applies the 5s socket timeout."""
+
+    provider = OpenAICompatibleProvider(settings=_fully_configured_settings())
+    provider.probe()
+    assert len(fake_http_get.requests) == 1
+    assert fake_http_get.requests[0]["timeout"] == pytest.approx(5.0)
+
+
+def test_probe_default_settings_when_none_uses_default_base_url(
+    monkeypatch,
+) -> None:
+    """P2 default-settings fix (Codex round-2 P2): the CLI builds
+    a default :class:`ProviderRuntimeSettings` from
+    :class:`ModelProviderConfig` when no model config is on disk
+    and the operator explicitly asks for ``--provider
+    openai_compatible``. The probe MUST succeed against those
+    defaults (default ``base_url`` is ``http://localhost:8000/v1``
+    per :class:`OpenAICompatibleConfig`); the HTTP layer is
+    monkeypatched so no real socket is bound.
+    """
+
+    from planner.model_config import ModelProviderConfig
+
+    monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+
+    class _BoomGet:
+        def __init__(self) -> None:
+            self.requests: list = []
+
+        def get(self, url, headers, timeout):
+            self.requests.append({"url": url, "timeout": timeout})
+            # Don't pretend the endpoint is healthy; we only need
+            # to prove the request URL is the defaults-built one.
+            return 503, b"service unavailable"
+
+    boom = _BoomGet()
+    monkeypatch.setattr(oca_mod, "http_get", boom.get)
+
+    settings = resolve_runtime_settings(
+        ModelProviderConfig(planner_provider="openai_compatible"),
+        provider_name="openai_compatible",
+    )
+    provider = OpenAICompatibleProvider(settings=settings)
+    result = provider.probe()
+
+    # Defaults resolve to ``http://localhost:8000/v1``; probe
+    # endpoint is ``{base_url.rstrip("/")}/models``.
+    assert boom.requests[0]["url"] == "http://localhost:8000/v1/models"
+    assert result.healthy is False  # 503 from the fake server
+    assert "<redacted>" not in (result.reason or "")  # nothing to redact
+
+
 # ---- imports / env scrubbing ------------------------------------------
 
 

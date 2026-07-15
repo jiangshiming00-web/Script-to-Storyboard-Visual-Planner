@@ -1,5 +1,60 @@
 # Handoff
 
+## 当前状态（2026-07-15 - Phase 3 P2 probe Round 1 Codex fix landed，等 Codex 复审放行后再 push + 进 Round 2）
+
+按 Codex 手工对手方对 probe Round 1 implementation (`0128dd1`) 的复审结论，verdict **暂不建议进入 Round 2，也先不要 push**。本轮按"Round 1 Codex fix"模板全部修齐 + 补最小回归测试，等 Codex 复审放行后 push + 进 Round 2。
+
+### Round 1 Codex fix（3 finding 全部收口）
+
+- **P1（红线）probe URL 泄露 secret**：`OpenAICompatibleProvider.probe()` 在 reason / details["endpoint"] 写 raw URL。如果 operator 把 `sk-...` key 嵌进 `base_url` path，secret 通过 probe result 流到 CLI stdout/stderr。Codex 复现：`base_url='https://example.com/v1/sk-probe-secret-1234567890'` → result 含 raw token。
+  - 修法：`safe_url = _redact_secrets(url)`；3 处出口（happy + unhealthy + exception 路径）全部用 safe_url；真实 HTTP 请求仍用 raw URL。
+  - 沿用现有 4 条 redact regex（Bearer / sk- / sk-ant- / gho_）；不引入新 pattern。
+- **P2（1/2）`--timeout-ms` 未生效**：CLI option 默认 5000ms，但 adapter 写死 `timeout_seconds = 5.0`。Brief 已把 `--timeout-ms` 列为契约。
+  - 修法：`BaseProvider.probe(*, timeout_ms: int = 5000)` 抽象加 kwarg；3 个 raise-NotImpl adapter 签名同步（无网络 round-trip，kwarg 忽略）；`OpenAICompatibleProvider.probe` 用 `max(timeout_ms, 1) / 1000.0` 计算 socket timeout；CLI `instance.probe(timeout_ms=timeout_ms)` 接通链路。
+- **P2（2/2）`--provider openai_compatible` 无 model-config 时 settings=None**：CLI 注释承诺"Resolve from model_config or defaults"，但 `_load_model_config_for_cli()` 返回 None 时 settings 仍 None，`_require_settings()` 抛 "constructed without ProviderRuntimeSettings"。`health_check()` 已有 default fallback，probe 路径漏掉。
+  - 修法：当 `_load_model_config_for_cli()` 返回 None + provider 是 openai_compatible 时，构造 `ModelProviderConfig(planner_provider="openai_compatible")` + `resolve_runtime_settings(...)` 作 defaults（与 `health_check()` fallback 镜像）。其他 provider 不需要 settings，保持现状。
+
+### Tests（`tests/test_openai_compatible_adapter.py` +5 regression）
+
+- `test_probe_redacts_secret_in_url_endpoint` —— P1 happy path，`base_url` 含 `sk-probe-secret-1234567890` → reason / details 不含 raw + `<redacted>` 已替换 + 真请求仍用 raw URL。
+- `test_probe_redacts_secret_in_unhealthy_path` —— P1 unhealthy path，HTTP 401 → reason / details 仍 redact URL。
+- `test_probe_uses_timeout_ms_kwarg` —— P2 timeout，`probe(timeout_ms=2500)` → `http_get` 收 `timeout=2.5`。
+- `test_probe_default_timeout_is_five_seconds` —— `probe()` 不传 kwarg → 5s default。
+- `test_probe_default_settings_when_none_uses_default_base_url` —— P2 default settings，从 `ModelProviderConfig(planner_provider="openai_compatible")` 解析 settings 后 probe 命中 `http://localhost:8000/v1/models`。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- **436 pytest**（431 旧 + 5 新增 regression），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留：
+  - safe_url 在 4 条 redact regex 之外不引入新 pattern；
+  - 真实请求仍走 raw URL（probe 语义要求真命中）；
+  - base.py / 3 raise-NotImpl adapter 签名扩展是 kwarg-only，对所有现有调用方零侵入。
+- 4 路径 CLI smoke 全 0 traceback、exit code 与 brief §2.3 表完全对齐。
+- `python3 harness/agent_scenarios/run_all.py` —— **7 scenarios 全过**，live cross-check + live agent replay 都绿。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 probe Round 1 Codex fix**（重点看）：
+  1. `safe_url = _redact_secrets(url)` 覆盖 happy + unhealthy + exception 三条出口；
+  2. 真请求仍用 raw URL（probe 语义要求真命中 endpoint）；
+  3. `BaseProvider.probe` 加 kwarg 对现有 3 个 raise-NotImpl adapter 签名兼容；
+  4. `timeout_ms / 1000.0` 下界保护（`max(timeout_ms, 1)`）；
+  5. CLI default settings fallback 与 `health_check()` 镜像契约一致；
+  6. 5 个回归测试真匹配 regex / fixture 真有 secret / 默认 settings 真走到 defaults。
+- **Codex 通过后**：
+  - `git push origin main`（本地 ahead origin 2 commits → 4 commits）。
+  - 启动 Round 2（`tests/test_provider_probe.py` +18 unit + `tests/test_cli_provider_probe.py` +10 cli + 2 个 harness scenario）。
+- **Codex 未通过**：按 P1/P2 反馈再修，单独 commit + 再次复审。
+
+### 候补 next_actions
+
+1. `phase3_p2_provider_probe_round1_codex_fix_codex_manual_re_review_pending` → 本 round
+2. `phase3_p2_provider_probe_round2_18_unit_10_cli_2_harness_scenarios` → 等本 round 复审通过
+3. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` → 等 probe 全闭环
+4. `core3_add_planner_bible_merge_for_cross_episode_continuity` → 最大范围，独立 user-ack
+
 ## 当前状态（2026-07-15 - Phase 3 P2 probe Round 1 implementation landed，等 Codex 复审 Round 1 + Round 2 tests/harness 启动）
 
 Codex PASS on round-2 brief (`1576d20`)，本轮按"Round 1 实现 + 2 P3 文案/测试数顺手修" 落地。Round 1 = 生产代码 + test fixture 同步（不新增测试，新测试留给 Round 2）。

@@ -122,7 +122,7 @@ class AnthropicProvider(BaseProvider):
     #: Default for type checkers; ``register`` overrides at import.
     name: str = "anthropic"
 
-    def probe(self) -> ProviderProbeResult:
+    def probe(self, *, timeout_ms: int = 5000) -> ProviderProbeResult:
         """Phase-1 skeleton: probe is intentionally not implemented.
 
         Mirror of :meth:`OpenAIProvider.probe`: even with
@@ -131,6 +131,10 @@ class AnthropicProvider(BaseProvider):
         keeps the planning methods raising
         :class:`NotImplementedError`, and we mirror that stance for
         ``probe()``.
+
+        ``timeout_ms`` is accepted to mirror the
+        :meth:`BaseProvider.probe` signature; the skeleton has no
+        network round-trip so the kwarg is ignored.
 
         Anthropic has no Messages-API Chat-Completions endpoint to
         model-list against without a paid call, so an opt-in

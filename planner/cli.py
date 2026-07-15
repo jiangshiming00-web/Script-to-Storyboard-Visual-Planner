@@ -419,7 +419,12 @@ def provider_probe_cmd(
     if provider == "openai_compatible":
         # Real adapter needs the configured settings (base_url,
         # api_key_env, etc.). Resolve from model_config or from
-        # defaults. Other providers accept and ignore settings.
+        # defaults so an operator who explicitly asks for
+        # ``--provider openai_compatible`` without a model config
+        # still gets a usable ``ProviderRuntimeSettings`` (the
+        # ``health_check`` path already has this fallback at
+        # ``openai_compatible_adapter.py`` ~line 484). Other
+        # providers accept and ignore settings.
         model_config = _load_model_config_for_cli(model_config_path)
         if model_config is not None:
             from .model_config import resolve_runtime_settings
@@ -427,10 +432,20 @@ def provider_probe_cmd(
             settings = resolve_runtime_settings(
                 model_config, provider_name=provider
             )
+        else:
+            from .model_config import (
+                ModelProviderConfig,
+                resolve_runtime_settings,
+            )
+
+            settings = resolve_runtime_settings(
+                ModelProviderConfig(planner_provider="openai_compatible"),
+                provider_name="openai_compatible",
+            )
 
     try:
         instance = _providers_get_provider(provider, settings=settings)
-        result = instance.probe()
+        result = instance.probe(timeout_ms=timeout_ms)
     except NotImplementedError as exc:
         # Adapter declared "I don't implement probe" (e.g. skeleton).
         # The brief §2.3 maps this to exit 1 with a structured one-

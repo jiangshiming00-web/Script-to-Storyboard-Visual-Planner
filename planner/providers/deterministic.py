@@ -45,7 +45,7 @@ class DeterministicProvider(BaseProvider):
     # checkers that don't follow decorator side-effects.
     name: str = "deterministic"
 
-    def probe(self) -> ProviderProbeResult:
+    def probe(self, *, timeout_ms: int = 5000) -> ProviderProbeResult:
         """Deterministic has no remote endpoint — probe is not applicable.
 
         Distinct from :meth:`health_check` (which always returns
@@ -56,6 +56,10 @@ class DeterministicProvider(BaseProvider):
         :class:`NotImplementedError` and let the CLI top-level
         handler convert it to ``ProviderProbeError(reason=
         "not_implemented")`` and exit ``1``.
+
+        ``timeout_ms`` is accepted to mirror the
+        :meth:`BaseProvider.probe` signature; deterministic has no
+        network round-trip so the kwarg is ignored.
 
         Operators who want a "is my model config wired right?" signal
         against the deterministic path should call ``planner

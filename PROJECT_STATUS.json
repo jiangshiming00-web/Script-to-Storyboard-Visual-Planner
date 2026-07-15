@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-15",
-  "phase": "v10_phase3_p2_provider_probe_round1_implementation_landed",
-  "status": "v10_phase3_p2_provider_probe_round1_landed_awaiting_codex_round4_review",
+  "phase": "v10_phase3_p2_provider_probe_round1_codex_fix_landed",
+  "status": "v10_phase3_p2_provider_probe_round1_codex_fix_landed_awaiting_codex_manual_re_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -152,7 +152,8 @@
     "phase3_p2_diagnose_continuity_audit_r14_r15_r16_landed",
     "phase3_p2_diagnose_continuity_audit_codex_redaction_fixed",
     "phase3_p2_provider_probe_design_brief_landed",
-    "phase3_p2_provider_probe_round1_implementation_landed"
+    "phase3_p2_provider_probe_round1_implementation_landed",
+    "phase3_p2_provider_probe_round1_codex_fix_landed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -232,7 +233,8 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_provider_probe_round1_codex_review_pending",
+    "phase3_p2_provider_probe_round1_codex_fix_codex_manual_re_review_pending",
+    "phase3_p2_provider_probe_round2_18_unit_10_cli_2_harness_scenarios",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
@@ -589,6 +591,12 @@
     "v10_phase3_p2_provider_probe_design_brief_round2": "pass (supersedes round-1; new brief committed to docs/design/provider_probe_design.md ~13 KB; 9 Goals G1-G9 + 4 Adapter scope + 22 test cases (14 unit + 8 cli) + 2 harness scenarios + 4 Open Questions + 3-round impl plan; P1-1 endpoint rstrip+'/models' pattern mirroring openai_compatible_adapter.py:431; P1-2 brief moved into repo git-tracked docs/design/; P2 CLI trigger=planner provider-probe (no --probe flag) + env gate AND + unified exit code table (gate close=2 / not_impl=1 / unhealthy=2 / healthy=0); P3 stale next_actions cleaned + ProviderProbeError class-name unified across CHANGELOG/HANDOFF/brief/PROJECT_STATUS; 0 code change this round; pytest still 431 with no regression)",
     "v10_phase3_p2_provider_probe_design_brief_round2_diff": "4 files in commit: NEW docs/design/provider_probe_design.md (~13 KB brief round-2 supersede round-1) + CHANGELOG.md (round-2 entry on top + typo fix at line 13 PlannerProbeError -> ProviderProbeError) + HANDOFF.md (top section updated to brief round-2 + 4 findings tracking) + PROJECT_STATUS.json (stale next_action removed + verification rows added + ProviderProbeError name sync). Archive pointer at workspace-files/.context/plan/probe_design.md kept as Round-1 reference. JSON validated, diff --check clean.",
     "v10_phase3_p2_provider_probe_round1": "pass (Round 1 implementation per brief §3; ProviderProbeError in exceptions.py + ProviderProbeResult dataclass + BaseProvider.probe() abstract in base.py + 4 adapter overrides (deterministic / openai skeleton / anthropic skeleton raise NotImpl + ALIGNMENT_HINT; openai_compatible real GET {base_url.rstrip('/')}/models with 5s timeout + _redact_secrets) + planner/cli.py provider-probe subcommand with _probe_gate_open() AND-gate (env exactly '1') + click.echo+ctx.exit(2) one-line policy refusal (NOT click.UsageError multi-line) + unified exit code table (gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0) + stdout one-line JSON; re-exports in planner/providers/__init__.py; test fixture sync _EchoProvider + _UnhealthyStubProvider + _Ephemeral raise NotImpl on probe; brief P3 inline fixes (test counts +14/+8 -> +18/+10; §2.2 sample code click.UsageError -> ctx.exit(2)). 0 test additions (Round 2 lands the +18 unit + +10 cli); pytest 431 passed consistent with 1576d20; CLI smoke 4 paths all exit codes match brief §2.3; 0 traceback on stderr).",
-    "v10_phase3_p2_provider_probe_round1_diff": "11 files in commit: docs/design/provider_probe_design.md (P3 brief drift fix: §2.2 sample code click.UsageError -> ctx.exit(2), §4.1 +14 -> +18, §4.2 +8 -> +10, §8 impl plan same alignment) + planner/cli.py (+/_probe_gate_open + provider-probe subcommand) + planner/exceptions.py (+ ProviderProbeError) + planner/providers/__init__.py (re-export ProviderProbeResult + http_get) + planner/providers/anthropic_adapter.py (probe raise NotImpl) + planner/providers/base.py (ProviderProbeResult + abstract probe) + planner/providers/deterministic.py (probe raise NotImpl) + planner/providers/openai_adapter.py (probe raise NotImpl + ALIGNMENT_HINT) + planner/providers/openai_compatible_adapter.py (_default_http_get + http_get + probe real impl with §2.5 endpoint contract) + tests/test_provider_health.py (probe stubs for _UnhealthyStubProvider + _Ephemeral) + tests/test_providers.py (probe stub for _EchoProvider). JSON validated, diff --check clean."
+    "v10_phase3_p2_provider_probe_round1_diff": "11 files in commit: docs/design/provider_probe_design.md (P3 brief drift fix: §2.2 sample code click.UsageError -> ctx.exit(2), §4.1 +14 -> +18, §4.2 +8 -> +10, §8 impl plan same alignment) + planner/cli.py (+/_probe_gate_open + provider-probe subcommand) + planner/exceptions.py (+ ProviderProbeError) + planner/providers/__init__.py (re-export ProviderProbeResult + http_get) + planner/providers/anthropic_adapter.py (probe raise NotImpl) + planner/providers/base.py (ProviderProbeResult + abstract probe) + planner/providers/deterministic.py (probe raise NotImpl) + planner/providers/openai_adapter.py (probe raise NotImpl + ALIGNMENT_HINT) + planner/providers/openai_compatible_adapter.py (_default_http_get + http_get + probe real impl with §2.5 endpoint contract) + tests/test_provider_health.py (probe stubs for _UnhealthyStubProvider + _Ephemeral) + tests/test_providers.py (probe stub for _EchoProvider). JSON validated, diff --check clean.",
+    "v10_phase3_p2_provider_probe_round1_codex_fix": "pass (P1 probe URL redaction: safe_url=_redact_secrets(url) covers happy + unhealthy + exception paths; P2 timeout_ms wired through BaseProvider.probe abstract + 3 raise-NotImpl adapter signatures + OpenAICompatibleProvider.probe with max(timeout_ms,1)/1000.0 socket timeout + CLI instance.probe(timeout_ms=timeout_ms); P2 default settings: cli.py builds ModelProviderConfig(planner_provider=openai_compatible) defaults when _load_model_config_for_cli returns None + provider is openai_compatible, mirroring health_check() fallback. 5 regression tests in tests/test_openai_compatible_adapter.py: test_probe_redacts_secret_in_url_endpoint + test_probe_redacts_secret_in_unhealthy_path + test_probe_uses_timeout_ms_kwarg + test_probe_default_timeout_is_five_seconds + test_probe_default_settings_when_none_uses_default_base_url)",
+    "v10_phase3_p2_provider_probe_round1_codex_fix_pytest": "pass (436 passed = 431 baseline + 5 new probe regression; agent/boundary collect unchanged; 0 regression; 22.29s)",
+    "v10_phase3_p2_provider_probe_round1_codex_fix_scenarios": "pass (7 scenarios; live cross-check + live agent replay both green; no new scenario this round — Round 2 adds provider_probe_opt_in.json + provider_probe_gate_closed.json per brief §4.2)",
+    "v10_phase3_p2_provider_probe_round1_codex_fix_smoke": "pass (4 CLI paths: gate closed env unset -> exit 2 + one-line stderr; gate closed env=0 -> exit 2; PLANNER_PROBE=1 --provider deterministic -> exit 1 + NotImpl message; PLANNER_PROBE=1 --provider openai -> exit 1 + ALIGNMENT_HINT. All 0 traceback on stderr; exit codes match brief §2.3 table)",
+    "v10_phase3_p2_provider_probe_round1_codex_fix_diff": "5 files in commit: planner/providers/base.py (BaseProvider.probe abstract signature +timeout_ms kwarg + docstring 强 safe_url 契约) + planner/providers/deterministic.py + planner/providers/openai_adapter.py + planner/providers/anthropic_adapter.py (probe kwarg 加 + 接受 + 忽略) + planner/providers/openai_compatible_adapter.py (probe signature + timeout_ms default 5000 + safe_url=_redact_secrets(url) 覆盖 3 处出口 + max(timeout_ms,1)/1000.0 socket timeout) + planner/cli.py (instance.probe(timeout_ms=timeout_ms) + default settings fallback 镜像 health_check) + tests/test_openai_compatible_adapter.py (+5 regression: _FakeHttpGet fixture + 2 P1 redaction + 2 P2 timeout + 1 P2 default settings) + CHANGELOG.md (本段) + HANDOFF.md (本段) + PROJECT_STATUS.json (本段). JSON validated, diff --check clean.",
+    "v10_phase3_p2_provider_probe_round1_codex_fix_no_push_yet": "pass (本地 main 仍 ahead origin 2 commits; 本 round commit fix 后等 Codex 复审通过再 push; Round 2 tests/harness 不入本 commit)"
   }
 }

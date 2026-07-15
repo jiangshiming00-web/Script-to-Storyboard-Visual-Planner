@@ -226,7 +226,7 @@ class BaseProvider(ABC):
         """
 
     @abstractmethod
-    def probe(self) -> "ProviderProbeResult":
+    def probe(self, *, timeout_ms: int = 5000) -> "ProviderProbeResult":
         """Optional network reachability / sanity check.
 
         Distinct from :meth:`health_check`. The two are deliberately
@@ -236,6 +236,13 @@ class BaseProvider(ABC):
           ``_select_provider`` reads in the pipeline hot path.
         * ``probe()`` is the opt-in network round-trip that **only**
           the ``planner provider-probe`` CLI subcommand triggers.
+
+        ``timeout_ms`` is the CLI-facing outer wall-clock budget
+        (default 5000ms per brief §2.2). Adapters that don't issue
+        network traffic (``deterministic``, the ``openai`` /
+        ``anthropic`` Phase-1 skeletons) accept the kwarg and
+        ignore it — it only matters to adapters that perform an
+        HTTP round-trip.
 
         Default implementation raises :class:`NotImplementedError`.
         Adapters that don't expose a remote endpoint
@@ -257,12 +264,17 @@ class BaseProvider(ABC):
           pattern.
         * no on-disk side effects (never touches
           ``run_summary.json``).
-        * outer wall-clock timeout enforced by the CLI; the adapter
-          SHOULD also set its own socket timeout (defense in depth).
+        * ``timeout_ms`` is applied as the socket-level timeout so a
+          wedged DNS resolution cannot hang the CLI. The CLI
+          enforces a parallel outer wall-clock budget; the two
+          stack as defense in depth.
         * every string field returned goes through
           :func:`planner.agent.redact.redact_secrets_text` before
           reaching stderr / stdout. Bearer tokens, ``sk-...``,
-          ``sk-ant-...``, ``gho_...`` MUST NOT appear in the result.
+          ``sk-ant-...``, ``gho_...`` MUST NOT appear in the
+          result — including the **URL itself** (operators can
+          wire secrets into ``base_url`` path / query, and the
+          redacted form is what the endpoint echo carries).
 
         Strict isolation contract (see brief §2.7):
 

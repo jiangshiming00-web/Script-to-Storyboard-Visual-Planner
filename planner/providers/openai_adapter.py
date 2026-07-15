@@ -183,7 +183,7 @@ class OpenAIProvider(BaseProvider):
 
     # ---- health check -------------------------------------------------
 
-    def probe(self) -> ProviderProbeResult:
+    def probe(self, *, timeout_ms: int = 5000) -> ProviderProbeResult:
         """Phase-1 skeleton: probe is intentionally not implemented.
 
         Even when the operator has wired ``PLANNER_OPENAI_API_KEY``
@@ -193,6 +193,10 @@ class OpenAIProvider(BaseProvider):
         ``probe()`` — exposing a probe here would imply real-model
         reachability is verifiable, which is a v1.x concern tied to
         the planning method rollout.
+
+        ``timeout_ms`` is accepted to mirror the
+        :meth:`BaseProvider.probe` signature; the skeleton has no
+        network round-trip so the kwarg is ignored.
 
         The CLI top-level handler catches the exception, wraps to
         ``ProviderProbeError(reason="not_implemented")``, and exits

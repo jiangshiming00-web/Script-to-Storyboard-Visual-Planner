@@ -2,6 +2,76 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-15 (Proma Phase 3 P2 prep - provider probe Round 1 Codex fix landed)
+
+Codex manual review of probe Round 1 implementation (`0128dd1`) verdict **暂不建议进入 Round 2，也先不要 push**：1 个 P1 redaction + 2 个 P2（timeout / default settings）会让 Round 2 测试直接卡住。本轮按"Round 1 Codex fix"模板全部修齐 + 补最小回归测试，等 Codex 复审放行后再 push + 进 Round 2。
+
+### Findings → Fixes（3 条全部收口）
+
+#### P1（红线）：probe() URL 泄露 secret
+
+**Bug**: `planner/providers/openai_compatible_adapter.py::OpenAICompatibleProvider.probe()` 把 raw endpoint URL 原样写进 `ProviderProbeResult.reason` 与 `details["endpoint"]`。如果 operator 在 model config 的 `base_url` 里把 key 嵌进 path（vLLM gateway `/v1/sk-...` 风格）或 query，secret 会通过 probe result 流到 CLI stdout / stderr。Codex 复现：`base_url='https://example.com/v1/sk-probe-secret-1234567890'` 时，result 直接含 raw `sk-probe-secret-1234567890`，与 R14/R15/R16 redaction 红线同类（CLI 最后一层 `redact_secrets_text` 在 CLI 端，但 provider result 本身已经泄露）。
+
+**Fix** (`planner/providers/openai_compatible_adapter.py`)：
+- 新增 `safe_url = _redact_secrets(url)`；`reason` / `details["endpoint"]` 全部用 `safe_url`。
+- 真实 HTTP 请求仍用 raw `url`（probe 必须真的命中 endpoint）。
+- 覆盖 3 处出口：`probe request to {url} raised` / `GET {url} returned {status_code}` / `details["endpoint"]`（happy + unhealthy + exception 路径）。
+- 4 条 redact regex（Bearer / sk- / sk-ant- / gho_）全部沿用；不新增 secret pattern。
+
+#### P2（1/2）：`--timeout-ms` 暴露但未生效
+
+**Bug**: `planner/cli.py::provider_probe_cmd` 有 `--timeout-ms` 选项（默认 5000），但 probe 调用链根本没传下去。adapter 写死 `timeout_seconds = 5.0`。Brief 已把 `--timeout-ms` 列为契约；Round 1 实现没接通会让 Round 2 CLI 测试直接卡住。
+
+**Fix**:
+- `planner/providers/base.py::BaseProvider.probe` abstract 签名加 `*, timeout_ms: int = 5000` kwarg。
+- 3 个 raise-NotImpl adapter（`deterministic` / `openai` skeleton / `anthropic` skeleton）签名同步加 kwarg 并忽略（无网络 round-trip，无 timeout 语义）。
+- `OpenAICompatibleProvider.probe(*, timeout_ms=5000)` 用 `max(timeout_ms, 1) / 1000.0` 计算 socket timeout，传给 `http_get`。
+- CLI `instance.probe(timeout_ms=timeout_ms)` 接通完整链路。
+
+#### P2（2/2）：`--provider openai_compatible` 无 model-config 时走不到默认 settings
+
+**Bug**: `planner/cli.py::provider_probe_cmd` 注释写 "Resolve from model_config or defaults"，但实际 `_load_model_config_for_cli()` 返回 `None` 时 `settings` 仍为 `None`，随后 `_require_settings()` 抛 "constructed without ProviderRuntimeSettings"。`health_check()` 已有 default-settings fallback，probe 路径却漏掉。
+
+**Fix** (`planner/cli.py`)：
+- 当 `_load_model_config_for_cli()` 返回 `None` + provider 是 `openai_compatible` 时，构造 `ModelProviderConfig(planner_provider="openai_compatible")` + `resolve_runtime_settings(...)` 作 defaults（与 `health_check()` fallback 路径镜像）。
+- 其他 provider 不需要 settings（`deterministic` 忽略 settings；openai / anthropic skeleton raise NotImpl 不需 settings）；保持现状。
+
+### Tests（`tests/test_openai_compatible_adapter.py` +5 regression）
+
+- `test_probe_redacts_secret_in_url_endpoint` —— P1 happy path，`base_url` 含 `sk-probe-secret-1234567890`，断言 reason / details 不含 raw token + `<redacted>` 已替换 + 真请求仍用 raw URL。
+- `test_probe_redacts_secret_in_unhealthy_path` —— P1 unhealthy path，HTTP 401，断言 reason / details 仍 redact URL。
+- `test_probe_uses_timeout_ms_kwarg` —— P2 timeout，`probe(timeout_ms=2500)` → `http_get` 收 `timeout=2.5`。
+- `test_probe_default_timeout_is_five_seconds` —— `probe()` 不传 kwarg → 5s default。
+- `test_probe_default_settings_when_none_uses_default_base_url` —— P2 default settings，从 `ModelProviderConfig(planner_provider="openai_compatible")` 解析 settings 后 probe 命中 `http://localhost:8000/v1/models`。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`。
+- **436 pytest**（431 旧 + 5 新增 regression），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke 产物走 `/tmp`。
+- production fail-closed + redact + read-only 全部保留：
+  - safe_url 在 4 条 redact regex 之外不引入新 pattern；
+  - 真实请求仍走 raw URL（probe 语义要求真命中）；
+  - base.py / 3 raise-NotImpl adapter 签名扩展是 kwarg-only，对所有现有调用方零侵入。
+- 4 路径 CLI smoke 全 0 traceback、exit code 与 brief §2.3 表完全对齐。
+- `python3 harness/agent_scenarios/run_all.py` —— **7 scenarios 全过**，live cross-check + live agent replay 都绿。
+
+### 验证
+
+- `python3 -m pytest` —— **436 passed, 2 warnings in 22.29s**
+- `python3 -m pytest tests/test_openai_compatible_adapter.py -q` —— 28 passed（含 5 新增 regression）
+- `python3 harness/agent_scenarios/run_all.py` —— ALL AGENT SCENARIO STEPS PASSED ✔
+- `python3 -m json.tool PROJECT_STATUS.json` —— 通过
+- `git diff --check` —— clean
+- `runs/` —— 仅含 `.gitkeep`
+
+### 不做（Round 1 Codex fix 边界）
+
+- 不进 Round 2（`tests/test_provider_probe.py` +18 unit + `tests/test_cli_provider_probe.py` +10 cli + 2 个 harness scenario 都留给 Round 2）。
+- 不 push 到 origin（本地 `main` 仍 ahead 2 commits；本 commit fix 后等 Codex 复审通过再 push）。
+- 不动 `pyproject.toml` / 不动 `health_check` / 不动 production fail-closed / 不动 base.py 已有契约除 `probe` 签名加 kwarg。
+- 不新增 secret regex（沿用 4 条；不引入 base_url query string 解析等新语义）。
+
 ## 2026-07-15 (Proma Phase 3 P2 prep - provider probe Round 1 implementation landed)
 
 Codex 复审 round-2 brief (`1576d20`) verdict **PASS**，2 P3 文案/测试数顺手修一起落到 Round 1 commit。本 commit 范围：brief P3 微调 + Round 1 生产代码（无测试新增，Round 2 才加）。三件套同步在单独 P3 status cleanup commit。
