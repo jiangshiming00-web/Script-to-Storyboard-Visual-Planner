@@ -1,5 +1,62 @@
 # Handoff
 
+## 当前状态（2026-07-15 - Phase 3 P2 probe Round 2 landed：tests + harness + P3 wording，等 Codex 复审放行后 push）
+
+按 Codex 手工对手方对 probe Round 1 Codex fix (`856a2d2`) 的复审 verdict **PASS**，本轮按 Round 2 brief §4 落地 18 unit + 10 cli tests + 2 harness scenarios + 顺手修 Codex 标注的 non-blocking P3 wording（"outer wall-clock timeout" → "socket timeout"）。`git push` 在 Codex 复审放行后即可执行。
+
+### Round 2 落地清单
+
+- **`tests/test_provider_probe.py` 18 unit**（brief §4.1）：
+  - 3 env gate（`_probe_gate_open()` strict `"1"` 匹配，parametrize 覆盖 `""` / `"0"` / `"1.0"` / `"true"` / `"True"` / `"yes"` / `"on"` / `"1 "` / `" 1"`）
+  - 4 endpoint pinning（默认 OpenAI / Ollama / vLLM / 末尾 `/` rstrip 吃掉）
+  - 3 happy / unhealthy / timeout（200 success + 404 unhealthy + `TimeoutError` 异常类名进 reason）
+  - 3 NotImplementedError（deterministic + openai skeleton + anthropic skeleton reason 对齐）
+  - 2 redaction（body 含 `sk-...` / `Bearer ...`，4xx path body excerpt 仍 redact）
+  - 3 invariants（cwd 5 次跑后无新文件 / `ProviderHealth` before-after byte-identical / `inspect.getsource` 静态扫 `probe` 不调 `health_check` 反之亦然）
+  - bonus 1（base abstract default 在 third-party subclass override 时仍 raise NotImpl + 接受 round-2 `timeout_ms` kwarg）
+  - 共 27 测试用例（18 functions + 9 parametrize expansion）
+- **`tests/test_cli_provider_probe.py` 10 subprocess**（brief §4.2）：
+  - 4 distinct exit code 表（gate closed=2 / unhealthy=2 / healthy=0 / NotImpl=1）
+  - 1 no-`--probe`-flag 守卫（`planner run --probe` 拒绝 + `provider-probe --help` 不含 `--probe` flag）
+  - 5 misc（env-only-no-subcommand sanity / no-subcommand-no-env sanity / stderr secret redaction / 不创建 run dir / 3 种 failure mode stderr 全无 `Traceback`）
+  - 本地 `http.server.HTTPServer` + `threading` 在 `127.0.0.1:<free_port>` 起 ephemeral 服务器
+- **2 harness scenarios**（brief §4.3）：
+  - `provider_probe_opt_in.json`（`category=probe` / `risk_level=opt_in_network` 新增 / 1 expected + 12 forbidden）
+  - `provider_probe_gate_closed.json`（`category=probe` / `risk_level=read_only` / 1 expected + 13 forbidden）
+  - `harness/agent_scenarios/run_all.py` 加 `probe` category 分支 + `_run_planner_probe_cli` + `_spawn_local_probe_server` + `_stop_local_probe_server` + `_write_model_config` + 2 个 `_validate_probe_*_replay` helper
+  - `VALID_CATEGORIES += {"probe"}` + `VALID_RISK_LEVELS += {"opt_in_network"}`
+  - **7 scenarios → 9 scenarios**
+- **P3 wording 顺手修**（Codex 标注 non-blocking）：`planner/cli.py` / `planner/providers/base.py` / `planner/providers/openai_compatible_adapter.py` 三处 "outer wall-clock timeout" → "socket timeout"。**不动 brief**（Round 2 锁定，后续 round 单独对齐外层 guard）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`；harness + CLI tests 全用 stdlib（`subprocess` / `urllib` / `http.server` / `socket` / `threading` / `tempfile`）。
+- **473 pytest**（436 Round 1 + 1 base-abstract-default + 1 skipped 消除 + 36 Round 2 = 27 unit + 10 cli 测试项展开），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；harness + CLI tests 产物落 `/tmp` 或 `tmp_path`。
+- production fail-closed + redact + read-only 全部保留：probe scenario `forbidden_tool_calls` 显式 forbid `submit_paid_job` / `write_run_dir` / `call_real_llm` / `call_paid_api` / `open_socket` / `http_get`；replay helper 在 probe 不发真网络（仅本机 http.server）。
+- 4 路径 CLI smoke + 9 harness scenarios 全 0 traceback、exit code 与 brief §2.3 表完全对齐。
+
+### 下一轮
+
+- **Codex 手工复审 Phase 3 P2 probe Round 2**（重点看）：
+  1. `test_provider_probe.py` 18 unit 是否真覆盖 brief §4.1 列表 + bonus 测试是否过度
+  2. `test_cli_provider_probe.py` 10 cli subprocess 是否用真本地 http.server（无 mock 偷懒）+ 4 路径 exit code 表对齐 brief §2.3
+  3. `provider_probe_opt_in.json` / `provider_probe_gate_closed.json` shape + assertions + forbidden tools 是否完整
+  4. `run_all.py` 7 → 9 scenarios 接入是否破既有 7 个 scenario
+  5. P3 wording 是否仍残留旧 "outer wall-clock" 字眼
+  6. 三件套是否对齐
+- **Codex 通过后**：
+  - `git push origin main`（本地 ahead origin 3 commits → 4 commits）
+  - 启动 Round 3：Phase 3 P2 收口（不接 GUI 面板 / 不动 core3 bible merge / opt-in probe 已闭环）
+- **Codex 未通过**：按反馈再修，单独 commit + 再次复审。
+
+### 候补 next_actions
+
+1. `phase3_p2_provider_probe_round2_codex_manual_re_review_pending` → 本 round
+2. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` → 等 probe 全闭环
+3. `design_provider_optional_probe_separate_from_health_check_no_default_paid_call` → 已闭环
+4. `core3_add_planner_bible_merge_for_cross_episode_continuity` → 最大范围，独立 user-ack
+
 ## 当前状态（2026-07-15 - Phase 3 P2 probe Round 1 Codex fix landed，等 Codex 复审放行后再 push + 进 Round 2）
 
 按 Codex 手工对手方对 probe Round 1 implementation (`0128dd1`) 的复审结论，verdict **暂不建议进入 Round 2，也先不要 push**。本轮按"Round 1 Codex fix"模板全部修齐 + 补最小回归测试，等 Codex 复审放行后 push + 进 Round 2。

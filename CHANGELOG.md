@@ -2,6 +2,66 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-15 (Proma Phase 3 P2 - provider probe Round 2 landed: tests + harness + P3 wording)
+
+Codex manual review of probe Round 1 Codex fix (`856a2d2`) verdict **PASS**，本轮按 Round 2 brief §4 落地 18 unit + 10 cli tests + 2 harness scenarios + 顺手修 Codex 标注的 non-blocking P3 wording + 推进 7 → 9 scenarios。Codex PASS 后即可 push。
+
+### Added
+
+- **`tests/test_provider_probe.py` 18 unit tests**（brief §4.1）：
+  - **3 env gate**（`_probe_gate_open()` strict `"1"` 匹配）：unset / 9 种 non-one 值（parametrize：`""` / `"0"` / `"1.0"` / `"true"` / `"True"` / `"yes"` / `"on"` / `"1 "` / `" 1"`）/ `"1"`。
+  - **4 endpoint pinning**（round-1 P1 fix 钉住）：默认 OpenAI URL（`api.openai.com/v1/models`，**不是** `/v1/v1/models`）/ Ollama `/v1` / vLLM `/v1` / 末尾多余 `/` rstrip 吃掉。
+  - **3 happy / unhealthy / timeout**：200 success（latency_ms 测出）/ 404 unhealthy（reason 含 "404"）/ `TimeoutError` 异常类名进 reason 而非 traceback。
+  - **3 NotImplementedError**（deterministic + openai skeleton + anthropic skeleton）：reason 都明确指向 validator 或 `openai_compatible`（skeleton alignment hint）。
+  - **2 redaction**：body 含 `sk-...`（404 path 才有 body excerpt）/ body 含 `Bearer ...`（4xx path）→ reason 含 `<redacted>`。
+  - **3 invariants**：probe 不写盘（cwd 5 次跑后无新文件）/ probe 不修改 `ProviderHealth`（before/after byte-identical）/ `inspect.getsource` 静态扫描确认 `probe` 不调 `health_check`、`health_check` 不调 `probe`（双向 contract）。
+  - **bonus 1**：`BaseProvider.probe` abstract default 在 third-party subclass override 时仍 raise `NotImplementedError`；接受 round-2 `timeout_ms` kwarg 并忽略。
+- **`tests/test_cli_provider_probe.py` 10 subprocess tests**（brief §4.2）：
+  - **4 distinct exit code 表**：gate closed=2（一行 stderr policy refusal）/ unhealthy=2（404 → `healthy=false` + JSON）/ healthy=0（200 → `latency_ms` + JSON）/ NotImpl=1（deterministic → stderr `not implemented`）。
+  - **1 no-`--probe`-flag 守卫**：`planner run --probe` 拒绝（Click "no such option"）+ `planner provider-probe --help` 不含 `--probe` flag。
+  - **5 misc**：env-only-no-subcommand sanity（`planner --help` rc=0 无副作用）/ no-subcommand-no-env sanity / stderr secret redaction（401 body 含 `sk-leak-...`，stdout / stderr 均无 raw + `<redacted>` 已在 stdout reason）/ 不创建 run dir（cwd 5 项 snapshot diff=∅）/ 3 种 failure mode（gate closed / NotImpl / unhealthy）stderr 全无 `Traceback`。
+  - **本地 HTTP server**：测试用 `http.server.HTTPServer` + `threading` 在 `127.0.0.1:<free_port>` 起 ephemeral 服务器；`http.server.BaseHTTPRequestHandler` 返回 canned status / body；不依赖真实网络 / 不污染仓库 `runs/`。
+- **2 harness scenarios**：
+  - **`harness/agent_scenarios/provider_probe_opt_in.json`**：`category=probe` / `risk_level=opt_in_network`（新增）/ 1 expected tool `planner_provider_probe_cli` / 12 forbidden tools（含 `run_pipeline` / `run_batch` / `submit_paid_job` / `write_run_dir` / `open_socket` / `call_real_llm` 等）/ 8 assertions（端点 rstrip / redact 5 出口 / 0 写盘 / 0 traceback / exit code 表 / 等）。
+  - **`harness/agent_scenarios/provider_probe_gate_closed.json`**：`category=probe` / `risk_level=read_only` / 1 expected / 13 forbidden（含 `open_socket` / `http_get`）/ 7 assertions（gate strict `"1"` / 一行 stderr / 0 网络 / 无 traceback / 等）。
+  - **`harness/agent_scenarios/run_all.py`**：`VALID_CATEGORIES += {"probe"}` + `VALID_RISK_LEVELS += {"opt_in_network"}`；新增 `_run_planner_probe_cli` + `_spawn_local_probe_server` + `_stop_local_probe_server` + `_write_model_config` + `_validate_probe_opt_in_replay` + `_validate_probe_gate_closed_replay`；`main()` 加 probe category 分支。**7 scenarios → 9 scenarios**。
+
+### P3 wording 顺手修（Codex 标注 non-blocking）
+
+Codex 复审指出：brief / base.py / cli.py / adapter docstring 都说 `timeout_ms` 是 "outer wall-clock timeout"，但当前实现只是 socket-level timeout（`max(timeout_ms, 1) / 1000.0` 传给 `http_get`），**没有**外层 wall-clock guard。本轮把措辞改为"socket timeout"与实现一致：
+
+- `planner/cli.py:354`：`--timeout-ms help` "Probe outer timeout in milliseconds" → "Probe socket timeout in milliseconds"
+- `planner/providers/openai_compatible_adapter.py:~418`：注释从 "Probe outer timeout: ... Defense in depth: 5s at the URLopen level too" → "Probe socket timeout: ... v1.0 does NOT impose a separate outer wall-clock guard on top of this"
+- `planner/providers/base.py:~260`：`BaseProvider.probe` docstring "outer wall-clock budget ... stack as defense in depth" → "v1.0 does not impose a separate outer wall-clock guard"
+
+不动 brief `/docs/design/provider_probe_design.md`：brief 是历史设计契约（Round 2 锁定），与实现偏离应在后续 round 单独对齐（要么补外层 guard、要么显式承认 v1.0 仅 socket-level）。
+
+### 红线守门
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`；harness + CLI tests 全用 stdlib（`subprocess` / `urllib` / `http.server` / `socket` / `threading` / `tempfile`）。
+- **473 pytest**（436 Round 1 + 1 base-abstract-default + 1 skipped 消除 + 36 Round 2 = 27 unit + 10 cli 测试项展开），零回归。
+- 仓库 `runs/` 仍只含根 `.gitkeep`；harness `tempfile.mkdtemp` + CLI tests 显式 `/tmp` out_dir / 测试 cwd 是 `tmp_path`。
+- production fail-closed + redact + read-only 全部保留：probe scenario `forbidden_tool_calls` 显式 forbid `submit_paid_job` / `write_run_dir` / `call_real_llm` / `call_paid_api` / `open_socket` / `http_get`；replay helper 在 probe 不发真网络（仅本机 http.server）。
+- 4 路径 CLI smoke + 9 harness scenarios 全 0 traceback、exit code 与 brief §2.3 表完全对齐。
+
+### 验证
+
+- `python3 -m pytest` —— **473 passed, 2 warnings in 29.41s**
+- `python3 -m pytest tests/test_provider_probe.py -v` —— 27 passed（含 parametrize 9 种 env gate 值）
+- `python3 -m pytest tests/test_cli_provider_probe.py -v` —— 10 passed in 41s（subprocess + http.server）
+- `python3 harness/agent_scenarios/run_all.py` —— **9 scenarios 全过**，含 2 新 probe scenarios（live probe replay）
+- 4 路径 CLI smoke（gate closed / deterministic / openai / openai_compatible）—— exit code 与 brief §2.3 对齐
+- `python3 -m json.tool PROJECT_STATUS.json` —— 通过
+- `git diff --check HEAD~1 HEAD` —— clean
+- `runs/` —— 仅含 `.gitkeep`
+
+### 不做（Round 2 边界）
+
+- 不动 brief `/docs/design/provider_probe_design.md`（Round 2 锁定；timeout 措辞偏离在后续 round 单独对齐）
+- 不动 `pyproject.toml` / 不接 GUI 面板 / 不做 probe 持久化 / 不并发 / 不重试 / 不落 `probe_history.jsonl`
+- 不修改 `ProviderProbeResult` / `ProviderProbeError` / 4 adapter probe 语义（Round 1 已定）
+- 不修改 base.py / 3 raise-NotImpl adapter 签名扩展（Round 1 Codex fix 已加 kwarg，Round 2 不再加）
+
 ## 2026-07-15 (Proma Phase 3 P2 prep - provider probe Round 1 Codex fix landed)
 
 Codex manual review of probe Round 1 implementation (`0128dd1`) verdict **暂不建议进入 Round 2，也先不要 push**：1 个 P1 redaction + 2 个 P2（timeout / default settings）会让 Round 2 测试直接卡住。本轮按"Round 1 Codex fix"模板全部修齐 + 补最小回归测试，等 Codex 复审放行后再 push + 进 Round 2。

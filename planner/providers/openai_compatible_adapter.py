@@ -407,10 +407,12 @@ class OpenAICompatibleProvider(BaseProvider):
         # raw ``url`` is still used for the actual HTTP request.
         safe_url = _redact_secrets(url)
 
-        # Probe outer timeout: ``timeout_ms`` is the CLI-facing knob
-        # (brief §2.2 default 5000ms). Defense in depth: the value
-        # is applied at the URLopen level too, so a wedged DNS
-        # resolution cannot hang the CLI.
+        # Probe socket timeout: ``timeout_ms`` is the CLI-facing knob
+        # (brief §2.2 default 5000ms). The value is applied at the
+        # URLopen level; v1.0 does NOT impose a separate outer
+        # wall-clock guard on top of this. The CLI exposes the knob
+        # so an operator can tighten the round-trip budget; the
+        # socket timeout is the only guard today.
         timeout_seconds = max(timeout_ms, 1) / 1000.0
 
         headers = {

@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
   "updated_at": "2026-07-15",
-  "phase": "v10_phase3_p2_provider_probe_round1_codex_fix_landed",
-  "status": "v10_phase3_p2_provider_probe_round1_codex_fix_landed_awaiting_codex_manual_re_review",
+  "phase": "v10_phase3_p2_provider_probe_round2_landed",
+  "status": "v10_phase3_p2_provider_probe_round2_landed_awaiting_codex_manual_re_review",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -153,7 +153,8 @@
     "phase3_p2_diagnose_continuity_audit_codex_redaction_fixed",
     "phase3_p2_provider_probe_design_brief_landed",
     "phase3_p2_provider_probe_round1_implementation_landed",
-    "phase3_p2_provider_probe_round1_codex_fix_landed"
+    "phase3_p2_provider_probe_round1_codex_fix_landed",
+    "phase3_p2_provider_probe_round2_landed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -233,8 +234,7 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_provider_probe_round1_codex_fix_codex_manual_re_review_pending",
-    "phase3_p2_provider_probe_round2_18_unit_10_cli_2_harness_scenarios",
+    "phase3_p2_provider_probe_round2_codex_manual_re_review_pending",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "design_provider_optional_probe_separate_from_health_check_no_default_paid_call",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
@@ -597,6 +597,12 @@
     "v10_phase3_p2_provider_probe_round1_codex_fix_scenarios": "pass (7 scenarios; live cross-check + live agent replay both green; no new scenario this round — Round 2 adds provider_probe_opt_in.json + provider_probe_gate_closed.json per brief §4.2)",
     "v10_phase3_p2_provider_probe_round1_codex_fix_smoke": "pass (4 CLI paths: gate closed env unset -> exit 2 + one-line stderr; gate closed env=0 -> exit 2; PLANNER_PROBE=1 --provider deterministic -> exit 1 + NotImpl message; PLANNER_PROBE=1 --provider openai -> exit 1 + ALIGNMENT_HINT. All 0 traceback on stderr; exit codes match brief §2.3 table)",
     "v10_phase3_p2_provider_probe_round1_codex_fix_diff": "5 files in commit: planner/providers/base.py (BaseProvider.probe abstract signature +timeout_ms kwarg + docstring 强 safe_url 契约) + planner/providers/deterministic.py + planner/providers/openai_adapter.py + planner/providers/anthropic_adapter.py (probe kwarg 加 + 接受 + 忽略) + planner/providers/openai_compatible_adapter.py (probe signature + timeout_ms default 5000 + safe_url=_redact_secrets(url) 覆盖 3 处出口 + max(timeout_ms,1)/1000.0 socket timeout) + planner/cli.py (instance.probe(timeout_ms=timeout_ms) + default settings fallback 镜像 health_check) + tests/test_openai_compatible_adapter.py (+5 regression: _FakeHttpGet fixture + 2 P1 redaction + 2 P2 timeout + 1 P2 default settings) + CHANGELOG.md (本段) + HANDOFF.md (本段) + PROJECT_STATUS.json (本段). JSON validated, diff --check clean.",
-    "v10_phase3_p2_provider_probe_round1_codex_fix_no_push_yet": "pass (本地 main 仍 ahead origin 2 commits; 本 round commit fix 后等 Codex 复审通过再 push; Round 2 tests/harness 不入本 commit)"
+    "v10_phase3_p2_provider_probe_round1_codex_fix_no_push_yet": "pass (本地 main 仍 ahead origin 2 commits; 本 round commit fix 后等 Codex 复审通过再 push; Round 2 tests/harness 不入本 commit)",
+    "v10_phase3_p2_provider_probe_round2": "pass (Round 2 per brief §4: tests/test_provider_probe.py 18 unit (3 env gate incl parametrize 9 + 4 endpoint pinning + 3 happy/unhealthy/timeout + 3 NotImpl + 2 redaction + 3 invariants + 1 base abstract default) + tests/test_cli_provider_probe.py 10 cli (4 distinct exit codes + 1 no-`--probe`-flag guard + 5 misc) + 2 harness scenarios (provider_probe_opt_in.json + provider_probe_gate_closed.json) + harness/agent_scenarios/run_all.py 7->9 scenarios integration + P3 wording fix 'outer wall-clock timeout' -> 'socket timeout' in cli.py:354 + base.py:~260 + openai_compatible_adapter.py:~418. brief unchanged (Round 2 locked; timeout brief-implementation gap deferred to follow-up round).",
+    "v10_phase3_p2_provider_probe_round2_pytest": "pass (473 passed = 436 Round 1 + 1 skipped-eliminated + 36 Round 2 (27 unit + 10 cli - 1 because shared parametrize expansion counts as separate items) = +37 effective items; 0 regression; 29.41s full pytest)",
+    "v10_phase3_p2_provider_probe_round2_scenarios": "pass (9 scenarios; live cross-check + live agent replay + live probe replay (provider_probe_opt_in local http.server returning 200 -> exit 0 + healthy=true; provider_probe_gate_closed no env -> exit 2 + one-line stderr policy refusal) all green; existing 7 scenarios unaffected)",
+    "v10_phase3_p2_provider_probe_round2_smoke": "pass (4 CLI paths unchanged: gate closed env unset -> exit 2 + one-line stderr; PLANNER_PROBE=1 --provider deterministic -> exit 1 + NotImpl message; --provider openai -> exit 1 + ALIGNMENT_HINT; --provider openai_compatible -> exit 0/2 with redaction. All 0 traceback on stderr; exit codes match brief §2.3 table)",
+    "v10_phase3_p2_provider_probe_round2_diff": "9 files in commit: planner/cli.py (--timeout-ms help wording) + planner/providers/base.py (probe docstring wording) + planner/providers/openai_compatible_adapter.py (probe docstring wording) + tests/test_provider_probe.py (NEW 18 unit + bonus 1) + tests/test_cli_provider_probe.py (NEW 10 cli subprocess) + harness/agent_scenarios/provider_probe_opt_in.json (NEW) + harness/agent_scenarios/provider_probe_gate_closed.json (NEW) + harness/agent_scenarios/run_all.py (socket + threading + http.server imports; VALID_CATEGORIES + VALID_RISK_LEVELS extended; _run_planner_probe_cli + _spawn_local_probe_server + _stop_local_probe_server + _write_model_config + _validate_probe_opt_in_replay + _validate_probe_gate_closed_replay helpers; main() probe branch) + CHANGELOG.md (本段) + HANDOFF.md (本段) + PROJECT_STATUS.json (本段). JSON validated, diff --check clean.",
+    "v10_phase3_p2_provider_probe_round2_no_push_yet": "pass (本地 main 仍 ahead origin 3 commits (0128dd1 + b449f8c + 856a2d2); 本 round commit 后等 Codex 复审通过再 push; Round 3 收口 + GUI panel + core3 bible merge 等都留 Round 3+)"
   }
 }

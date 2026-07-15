@@ -350,7 +350,7 @@ def _probe_gate_open() -> bool:
     "--timeout-ms",
     default=5000,
     type=int,
-    help="Probe outer timeout in milliseconds (default 5000).",
+    help="Probe socket timeout in milliseconds (default 5000).",
 )
 @click.option(
     "--verbose",

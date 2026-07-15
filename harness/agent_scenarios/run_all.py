@@ -56,11 +56,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 HARNESS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = HARNESS_DIR.parent.parent
@@ -78,18 +80,29 @@ REQUIRED_TOP_KEYS = {
     "expected_tool_calls",
     "forbidden_tool_calls",
 }
-VALID_RISK_LEVELS = {"read_only", "requires_approval"}
-VALID_CATEGORIES = {"diagnose", "review", "approval_gate"}
+VALID_RISK_LEVELS = {"read_only", "requires_approval", "opt_in_network"}
+VALID_CATEGORIES = {"diagnose", "review", "approval_gate", "probe"}
 
 
 def _log(msg: str) -> None:
     print(f"[agent_scenarios] {msg}", flush=True)
 
 
-def _scrubbed_env() -> Dict[str, str]:
-    """Return a copy of the environment with PLANNER_* cleared."""
+def _scrubbed_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Return a copy of the environment with ``PLANNER_*`` cleared.
 
-    return {k: v for k, v in os.environ.items() if not k.startswith("PLANNER_")}
+    Optional ``extra`` is merged on top so callers can selectively
+    re-introduce specific ``PLANNER_`` vars (e.g. ``PLANNER_PROBE=1``
+    for the opt-in probe scenario). Anything already in the scrubbed
+    base takes precedence over ``extra`` — the harness wants the
+    *test* to set the var, not the parent shell.
+    """
+
+    base = {k: v for k, v in os.environ.items() if not k.startswith("PLANNER_")}
+    if extra:
+        for k, v in extra.items():
+            base.setdefault(k, v)
+    return base
 
 
 def load_scenarios() -> Dict[str, dict]:
@@ -230,6 +243,28 @@ def _run_planner_agent_cli(
         cwd=str(cwd),
         env=env,
         timeout=180,
+    )
+
+
+def _run_planner_probe_cli(
+    *args: str, cwd: Path, env: Dict[str, str]
+) -> "subprocess.CompletedProcess[str]":
+    """Run ``python3 -m planner provider-probe ...`` and return the
+    completed process. Used by :func:`validate_live_agent_replay`
+    to drive the probe scenarios.
+
+    The harness always passes ``PLANNER_PROBE=1`` (unless the test
+    is specifically exercising the gate-closed branch) and points
+    the openai_compatible ``base_url`` at a local ``http.server``
+    bound by the test wrapper. No real network egress happens.
+    """
+    return subprocess.run(
+        [PYTHON, "-m", "planner", "provider-probe", *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        env=env,
+        timeout=60,
     )
 
 
@@ -474,6 +509,27 @@ def validate_live_agent_replay(
         _log(f"{name}: live agent replay ok ({sub} full + tool_invocations non-empty)")
         return
 
+    # ------------------------------------------------------------------
+    # probe_* scenarios: Phase 3 P2 provider probe. Two scenarios:
+    #   * provider_probe_opt_in: PLANNER_PROBE=1 + subcommand + a
+    #     local http.server returning 200 → exit 0, healthy=true on
+    #     stdout JSON.
+    #   * provider_probe_gate_closed: subcommand WITHOUT PLANNER_PROBE
+    #     → exit 2 + one-line stderr policy refusal, ZERO network calls
+    #     (the gate is checked BEFORE provider resolution).
+    # ------------------------------------------------------------------
+    if cat == "probe":
+        if "opt_in" in name:
+            _validate_probe_opt_in_replay(name, scenario, PROJECT_ROOT)
+        elif "gate_closed" in name:
+            _validate_probe_gate_closed_replay(name, scenario, PROJECT_ROOT)
+        else:
+            raise SystemExit(
+                f"[agent_scenarios] {name}: unknown probe scenario id; "
+                "expected 'opt_in' or 'gate_closed' in name"
+            )
+        return
+
     # approval_gate: shape-only check is sufficient.
     _log(f"{name}: live agent replay skipped (category={cat!r})")
 
@@ -565,6 +621,176 @@ def validate_live_cross_check(
     )
 
 
+def _spawn_local_probe_server(
+    response: Tuple[int, bytes],
+) -> Tuple[threading.Thread, "HTTPServer", int]:
+    """Bind a local ``http.server`` that returns ``response`` for any
+    GET. Returns ``(thread, server, port)`` so the caller can shut
+    it down at end of test. Mirrors the helper in
+    ``tests/test_cli_provider_probe.py`` but keeps the harness's
+    own copy so the two stay independent."""
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            status, body = response
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):  # silence stderr noise
+            return
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return thread, server, port
+
+
+def _stop_local_probe_server(
+    server: "HTTPServer", thread: threading.Thread
+) -> None:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
+
+
+def _write_model_config(
+    tmp_dir: Path, base_url: str, *, provider: str = "openai_compatible"
+) -> Path:
+    """Write a minimal ``model_config.json`` to ``tmp_dir`` pointing
+    ``base_url`` at the local probe server. The api_key_env is set
+    to ``PLANNER_PROBE_TEST_KEY`` (also exported by the harness
+    caller's env)."""
+
+    cfg = {
+        "planner_provider": provider,
+        "enable_real_model_calls": False,
+        "allow_provider_fallback": False,
+        "openai_compatible": {
+            "base_url": base_url,
+            "model": "probe-harness-model",
+            "api_key_env": "PLANNER_PROBE_TEST_KEY",
+            "timeout_seconds": 10.0,
+            "temperature": 0.5,
+            "max_tokens": 256,
+        },
+    }
+    cfg_path = tmp_dir / "model_config.json"
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return cfg_path
+
+
+def _validate_probe_opt_in_replay(name: str, scenario: dict, cwd: Path) -> None:
+    """Replay ``provider_probe_opt_in``: spawn a local HTTP server
+    that returns 200, run ``planner provider-probe --provider
+    openai_compatible --model-config <tmp>`` with ``PLANNER_PROBE=1``
+    in env, assert exit 0 + stdout JSON healthy=true + no secret
+    leaks (none expected here, but the assertion runs anyway)."""
+
+    tmp_root = Path(tempfile.mkdtemp(prefix=f"probe_opt_in_{name}_"))
+    try:
+        thread, server, port = _spawn_local_probe_server((200, b'{"object":"list","data":[]}'))
+        try:
+            cfg = _write_model_config(tmp_root, f"http://127.0.0.1:{port}/v1")
+            env = _scrubbed_env({
+                "PLANNER_PROBE": "1",
+                "PLANNER_PROBE_TEST_KEY": "sk-harness-probe-1234567890",
+            })
+            proc = _run_planner_probe_cli(
+                "--provider", "openai_compatible",
+                "--model-config", str(cfg),
+                cwd=cwd,
+                env=env,
+            )
+        finally:
+            _stop_local_probe_server(server, thread)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: opt-in probe CLI failed "
+            f"(rc={proc.returncode}); stderr={proc.stderr}"
+        )
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: probe CLI returned non-JSON "
+            f"stdout: {proc.stdout[:500]} ({exc})"
+        )
+    if payload.get("healthy") is not True:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: expected healthy=True, got "
+            f"{payload.get('healthy')!r}; reason={payload.get('reason')!r}"
+        )
+    if payload.get("provider") != "openai_compatible":
+        raise SystemExit(
+            f"[agent_scenarios] {name}: expected provider="
+            f"'openai_compatible', got {payload.get('provider')!r}"
+        )
+    if "latency_ms" not in payload:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: payload missing latency_ms: {payload!r}"
+        )
+    # No traceback; no secret echo (none seeded, but assert anyway).
+    if "Traceback" in proc.stderr:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: traceback leaked to stderr: {proc.stderr!r}"
+        )
+    _log(f"{name}: live probe replay ok (exit 0 + healthy=true)")
+
+
+def _validate_probe_gate_closed_replay(name: str, scenario: dict, cwd: Path) -> None:
+    """Replay ``provider_probe_gate_closed``: invoke the probe
+    subcommand WITHOUT ``PLANNER_PROBE`` in env; expect exit 2 +
+    one-line stderr policy refusal, ZERO network calls. The CLI
+    gate check happens before provider resolution so no
+    ``http_get`` is reachable."""
+
+    env = _scrubbed_env()  # already strips PLANNER_PROBE
+    proc = _run_planner_probe_cli(
+        "--provider", "openai_compatible",
+        cwd=cwd,
+        env=env,
+    )
+    if proc.returncode != 2:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: gate-closed probe CLI expected "
+            f"exit 2, got {proc.returncode}; stderr={proc.stderr!r}"
+        )
+    if "opt-in only" not in proc.stderr:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: gate-closed stderr missing "
+            f"policy refusal marker; got {proc.stderr!r}"
+        )
+    if "PLANNER_PROBE=1" not in proc.stderr:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: gate-closed stderr missing "
+            f"'PLANNER_PROBE=1' hint; got {proc.stderr!r}"
+        )
+    if proc.stdout.strip() != "":
+        raise SystemExit(
+            f"[agent_scenarios] {name}: gate-closed probe wrote to "
+            f"stdout (expected empty): {proc.stdout!r}"
+        )
+    if "Traceback" in proc.stderr:
+        raise SystemExit(
+            f"[agent_scenarios] {name}: gate-closed leaked traceback: "
+            f"{proc.stderr!r}"
+        )
+    _log(f"{name}: live probe replay ok (exit 2 + policy refusal)")
+
+
 def validate_approval_gate_shape(name: str, scenario: dict) -> None:
     """Step 3: approval-gate scenarios declare the right shape."""
 
@@ -633,6 +859,13 @@ def main() -> int:
                 # output. This catches real runtime defects that
                 # static shape + artifact existence cannot (e.g. the
                 # P1 secret-leak in provider.fallback_reason).
+                validate_live_agent_replay(
+                    name, scenario, sample_run_dir, sample_batch_dir,
+                )
+            elif scenario["category"] == "probe":
+                # Probe scenarios don't depend on a sample run / batch
+                # fixture; they spin up their own local http.server in
+                # the replay helper.
                 validate_live_agent_replay(
                     name, scenario, sample_run_dir, sample_batch_dir,
                 )

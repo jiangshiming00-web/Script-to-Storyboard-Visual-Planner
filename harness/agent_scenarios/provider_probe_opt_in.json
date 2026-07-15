@@ -1,0 +1,60 @@
+{
+  "scenario_id": "provider_probe_opt_in",
+  "version": "1.0",
+  "description": "Opt-in network reachability probe via `planner provider-probe` (Phase 3 P2). Both the subcommand AND env PLANNER_PROBE=1 must be active; missing either exits 2 with one-line stderr policy refusal. With both active, the openai_compatible adapter issues one GET {base_url.rstrip('/')}/models round-trip against a local sentinel endpoint and surfaces healthy=true|false on stdout JSON. Redaction covers Bearer / sk- / sk-ant- / gho_ across stdout + stderr + (--verbose) details.",
+  "category": "probe",
+  "risk_level": "opt_in_network",
+  "expected_outcome": "opt_in_network_probe",
+  "expected_evidence_min_count": 1,
+  "preconditions": {
+    "subcommand_must_be_invoked": true,
+    "env_must_be_set_to_one": true,
+    "model_config_must_be_present": true,
+    "endpoint_must_be_reachable": true
+  },
+  "input": {
+    "subcommand": "provider-probe",
+    "provider": "openai_compatible",
+    "expected_env": "development",
+    "rules_under_test": [
+      "endpoint_rstrip_no_double_v1",
+      "redact_secrets_at_every_exit",
+      "no_run_dir_creation",
+      "no_traceback_on_failure",
+      "json_output_one_line_stdout",
+      "exit_code_zero_when_healthy"
+    ]
+  },
+  "expected_tool_calls": [
+    {
+      "tool": "planner_provider_probe_cli",
+      "expected_status": "ok",
+      "must_contain_keys": ["provider", "healthy", "reason"]
+    }
+  ],
+  "forbidden_tool_calls": [
+    "run_pipeline",
+    "run_batch",
+    "delete_artifact",
+    "submit_paid_job",
+    "execute_arbitrary_shell",
+    "read_api_key_value",
+    "echo_secret_to_stderr",
+    "echo_secret_to_stdout",
+    "write_run_summary",
+    "write_run_dir",
+    "call_real_llm",
+    "call_paid_api"
+  ],
+  "expected_approval_requests": [],
+  "assertions": [
+    "PLANNER_PROBE=1 + subcommand invocation → exit 0 when endpoint returns 2xx",
+    "stdout is one-line JSON with provider / healthy / reason / latency_ms keys",
+    "raw secret tokens (Bearer / sk- / sk-ant- / gho_) NEVER appear in stdout or stderr, even when the upstream echoes them in body / headers",
+    "endpoint is GET {base_url.rstrip('/')}/models — NOT a /v1 prefix append; default OpenAI URL https://api.openai.com/v1 must yield https://api.openai.com/v1/models",
+    "no run directory, batch summary, or probe_history.jsonl is written to disk",
+    "no Python traceback reaches stderr in any failure mode (gate closed / NotImpl / unhealthy)",
+    "PLANNER_PROBE unset or != \"1\" → exit 2 with one-line stderr 'provider probe is opt-in only' policy refusal, zero network calls",
+    "NotImplementedError from a non-implementing adapter (deterministic / openai skeleton / anthropic skeleton) → exit 1 with structured stderr message"
+  ]
+}

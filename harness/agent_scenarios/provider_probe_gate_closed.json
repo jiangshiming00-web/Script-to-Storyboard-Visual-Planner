@@ -1,0 +1,57 @@
+{
+  "scenario_id": "provider_probe_gate_closed",
+  "version": "1.0",
+  "description": "Default-deny check: `planner provider-probe` invoked without PLANNER_PROBE=1 (env unset / \"0\" / \"true\" / \"\" / typos) MUST exit 2 with one-line stderr policy refusal and ZERO network calls. Patches urllib.request.urlopen to raise AssertionError on any socket bind so the harness can prove the gate is enforced before any HTTP layer is reached. Mirrors the `_find_free_port` style in-process monkeypatch pattern used by harness/smoke_gui.py.",
+  "category": "probe",
+  "risk_level": "read_only",
+  "expected_outcome": "gate_closed_policy_refusal",
+  "expected_evidence_min_count": 1,
+  "preconditions": {
+    "subcommand_must_be_invoked": true,
+    "env_must_be_unset_or_not_one": true,
+    "no_network_call_expected": true
+  },
+  "input": {
+    "subcommand": "provider-probe",
+    "provider": "openai_compatible",
+    "expected_env": "development",
+    "rules_under_test": [
+      "and_gate_subcommand_x_env",
+      "policy_refusal_one_line_stderr",
+      "zero_network_when_gate_closed",
+      "no_traceback_at_stderr"
+    ]
+  },
+  "expected_tool_calls": [
+    {
+      "tool": "planner_provider_probe_cli",
+      "expected_status": "refused",
+      "must_contain_keys": ["exit_code", "stderr_one_line"]
+    }
+  ],
+  "forbidden_tool_calls": [
+    "run_pipeline",
+    "run_batch",
+    "delete_artifact",
+    "submit_paid_job",
+    "execute_arbitrary_shell",
+    "read_api_key_value",
+    "echo_secret_to_stderr",
+    "write_run_summary",
+    "write_run_dir",
+    "call_real_llm",
+    "call_paid_api",
+    "open_socket",
+    "http_get"
+  ],
+  "expected_approval_requests": [],
+  "assertions": [
+    "PLANNER_PROBE unset OR != \"1\" → exit 2 with one-line stderr policy refusal",
+    "no urllib.request.urlopen call is made (assertion patch never fires)",
+    "stderr contains 'opt-in only' and 'PLANNER_PROBE=1' as substring markers",
+    "stdout is empty (policy refusal is on stderr)",
+    "no Python traceback in stderr",
+    "exact-match gate: PLANNER_PROBE='0' / 'true' / 'yes' / '1.0' / ' 1' all keep gate closed (strict literal \"1\" only)",
+    "the gate check happens BEFORE provider resolution or settings build — even an invalid --provider does not trigger network"
+  ]
+}

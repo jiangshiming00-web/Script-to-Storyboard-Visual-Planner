@@ -265,9 +265,10 @@ class BaseProvider(ABC):
         * no on-disk side effects (never touches
           ``run_summary.json``).
         * ``timeout_ms`` is applied as the socket-level timeout so a
-          wedged DNS resolution cannot hang the CLI. The CLI
-          enforces a parallel outer wall-clock budget; the two
-          stack as defense in depth.
+          wedged DNS resolution cannot hang the CLI. v1.0 does not
+          impose a separate outer wall-clock guard on top of this —
+          the socket timeout is the only round-trip budget the
+          adapter enforces.
         * every string field returned goes through
           :func:`planner.agent.redact.redact_secrets_text` before
           reaching stderr / stdout. Bearer tokens, ``sk-...``,
