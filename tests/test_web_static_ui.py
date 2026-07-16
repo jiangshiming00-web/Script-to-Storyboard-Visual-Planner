@@ -401,6 +401,57 @@ def test_app_js_catches_use_formatUserError() -> None:
         )
 
 
+# --- P0A-4: out-dir live preview ----------------------------------------
+
+
+def test_app_js_has_bindOutDirPreview_function() -> None:
+    """P0A-4: app.js defines bindOutDirPreview() that wires the
+    out-dir input to a live preview node."""
+
+    js = _read("app.js")
+    assert "function bindOutDirPreview" in js, (
+        "app.js must define bindOutDirPreview() per P0A-4"
+    )
+    # And the function is called from DOMContentLoaded
+    assert "bindOutDirPreview()" in js, (
+        "bindOutDirPreview() must be invoked on DOMContentLoaded"
+    )
+
+
+def test_app_js_out_dir_preview_binds_input_event() -> None:
+    """P0A-4: the out-dir input has an 'input' event listener that
+    updates the out-dir-preview text node."""
+
+    js = _read("app.js")
+    # Reference both the input and the preview node
+    assert 'getElementById("out-dir")' in js or '$("out-dir")' in js
+    assert 'getElementById("out-dir-preview")' in js or '$("out-dir-preview")' in js
+    # And binds an input listener
+    import re
+    # outInput.addEventListener("input", update) pattern
+    pattern = re.compile(
+        r"""outInput\.addEventListener\(\s*['"]input['"]""",
+        re.MULTILINE,
+    )
+    assert pattern.search(js), (
+        "bindOutDirPreview must addEventListener('input', ...) on out-dir"
+    )
+
+
+def test_app_js_out_dir_preview_default_text_is_subdirectory_label() -> None:
+    """P0A-4: when the out-dir input is empty, the preview text shows
+    the '默认子目录' label (matches the HTML default)."""
+
+    js = _read("app.js")
+    # The empty-value branch of bindOutDirPreview sets "默认子目录"
+    idx = js.find("function bindOutDirPreview")
+    assert idx != -1
+    chunk = js[idx:idx + 1500]
+    assert "默认子目录" in chunk, (
+        "bindOutDirPreview empty branch should set preview to '默认子目录'"
+    )
+
+
 # --- P0A-2: first-screen workflow rearrangement --------------------------
 
 

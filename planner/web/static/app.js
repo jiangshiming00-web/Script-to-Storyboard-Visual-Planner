@@ -124,6 +124,43 @@
     return prefix;
   }
 
+  // ---- P0A-4: out-dir live preview ------------------------------------
+
+  // bindOutDirPreview: when the user types a parent folder in
+  // #out-dir, show a real-time preview of the actual run subdirectory
+  // the backend would create. Frontend estimate only (precision: 1
+  // second; backend run_id is yyyymmdd-HHMMSS-microseconds-randomhex —
+  // see planner/web/run_service.py::generate_run_id). UX is the goal,
+  // not contract fidelity.
+  function bindOutDirPreview() {
+    var outInput = $("out-dir");
+    var preview = $("out-dir-preview");
+    if (!outInput || !preview) return;
+    var pad = function (n) { return String(n).padStart(2, "0"); };
+    var fmt = function (date) {
+      if (isNaN(date.getTime())) return "默认子目录";
+      return date.getFullYear() +
+        pad(date.getMonth() + 1) +
+        pad(date.getDate()) +
+        "-" +
+        pad(date.getHours()) +
+        pad(date.getMinutes()) +
+        pad(date.getSeconds());
+    };
+    var update = function () {
+      var v = outInput.value.trim();
+      if (!v) {
+        preview.textContent = "默认子目录";
+        return;
+      }
+      // Strip trailing slashes and append /<timestamp>/
+      var parent = v.replace(/\/+$/, "");
+      preview.textContent = parent + "/" + fmt(new Date()) + "/";
+    };
+    outInput.addEventListener("input", update);
+    update();
+  }
+
   // ---- env tabs ------------------------------------------------------
 
   function bindEnvTabs() {
@@ -435,6 +472,7 @@
     bindRunControls();
     bindModelConfigControls();
     setEnvWarning();
+    bindOutDirPreview();
     loadModelConfig();
     refreshRuns();
     startRefreshLoop();
