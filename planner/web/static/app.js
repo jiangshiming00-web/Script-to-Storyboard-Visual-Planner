@@ -48,8 +48,8 @@
   // ---- API client ----------------------------------------------------
 
   async function api(path, options) {
-    const opts = options || {};
-    const resp = await fetch(path, {
+    var opts = options || {};
+    var resp = await fetch(path, {
       method: opts.method || "GET",
       headers: Object.assign(
         { "Content-Type": "application/json" },
@@ -58,16 +58,24 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (!resp.ok) {
-      let msg = "HTTP " + resp.status;
+      // P0A-3 round-4 fix: parse the FastAPI {detail: {error, message}}
+      // shape and attach it to the thrown Error so formatUserError can
+      // pick the right mapping by errType = err.detail.error. Without
+      // this, run-btn / batch-btn's catch blocks would only see the
+      // raw message string and would NOT translate BrokenReferenceError
+      // / ProviderOutputError / ConfigError to friendly Chinese text.
+      var detail = null;
       try {
-        const detail = await resp.json();
-        msg = detail.detail
-          ? detail.detail.message || detail.detail.error || msg
-          : msg;
+        detail = (await resp.json()).detail;
       } catch (_) {
-        // body wasn't JSON; keep the generic HTTP message
+        // body wasn't JSON; keep detail null
       }
-      throw new Error(msg);
+      var msg = (detail && (detail.message || detail.error))
+        ? (detail.message || detail.error)
+        : "HTTP " + resp.status;
+      var err = new Error(msg);
+      err.detail = detail;
+      throw err;
     }
     if (resp.status === 204) return null;
     return resp.json();

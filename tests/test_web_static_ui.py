@@ -301,12 +301,19 @@ def test_format_user_error_handles_broken_reference() -> None:
     'shot list references missing ID' friendly message."""
 
     js = _read("app.js")
-    idx = js.find("BrokenReferenceError")
-    assert idx != -1
-    # Look at the next 500 chars (the mapping body)
-    chunk = js[idx:idx + 500]
-    assert "分镜" in chunk or "引用" in chunk, (
-        "BrokenReferenceError mapping should mention 分镜 or 引用"
+    # Find the mapping key (followed by a colon + friendly string).
+    # The first occurrence might be in a comment; use a precise pattern
+    # matching the JS map literal: '"BrokenReferenceError":' followed by
+    # a string that includes a Chinese keyword.
+    import re
+    match = re.search(
+        r'"BrokenReferenceError"\s*:\s*"([^"]+)"', js
+    )
+    assert match, "BrokenReferenceError map entry not found in formatUserError"
+    value = match.group(1)
+    assert "分镜" in value or "引用" in value, (
+        f"BrokenReferenceError friendly text should mention 分镜 or 引用; "
+        f"got: {value!r}"
     )
 
 
@@ -315,11 +322,15 @@ def test_format_user_error_handles_provider_output() -> None:
     'model returned unparseable format' friendly message."""
 
     js = _read("app.js")
-    idx = js.find("ProviderOutputError")
-    assert idx != -1
-    chunk = js[idx:idx + 500]
-    assert "模型返回" in chunk or "格式无法解析" in chunk, (
-        "ProviderOutputError mapping should mention 模型返回 or 格式无法解析"
+    import re
+    match = re.search(
+        r'"ProviderOutputError"\s*:\s*"([^"]+)"', js
+    )
+    assert match, "ProviderOutputError map entry not found in formatUserError"
+    value = match.group(1)
+    assert "模型返回" in value or "格式无法解析" in value, (
+        f"ProviderOutputError friendly text should mention 模型返回 or 格式无法解析; "
+        f"got: {value!r}"
     )
 
 
@@ -327,10 +338,10 @@ def test_format_user_error_handles_config() -> None:
     """P0A-3: formatUserError maps ConfigError to a 'configuration' friendly message."""
 
     js = _read("app.js")
-    idx = js.find('"ConfigError"')
-    assert idx != -1
-    chunk = js[idx:idx + 200]
-    assert "配置" in chunk
+    import re
+    match = re.search(r'"ConfigError"\s*:\s*"([^"]+)"', js)
+    assert match, "ConfigError map entry not found in formatUserError"
+    assert "配置" in match.group(1)
 
 
 def test_format_user_error_handles_environment_boundary() -> None:
@@ -338,10 +349,10 @@ def test_format_user_error_handles_environment_boundary() -> None:
     'environment / path' friendly message."""
 
     js = _read("app.js")
-    idx = js.find("EnvironmentBoundaryError")
-    assert idx != -1
-    chunk = js[idx:idx + 200]
-    assert "环境" in chunk or "路径" in chunk
+    import re
+    match = re.search(r'"EnvironmentBoundaryError"\s*:\s*"([^"]+)"', js)
+    assert match, "EnvironmentBoundaryError map entry not found in formatUserError"
+    assert "环境" in match.group(1) or "路径" in match.group(1)
 
 
 def test_format_user_error_handles_provider_unavailable() -> None:
@@ -349,10 +360,10 @@ def test_format_user_error_handles_provider_unavailable() -> None:
     'model failed health check' friendly message."""
 
     js = _read("app.js")
-    idx = js.find("ProviderUnavailableError")
-    assert idx != -1
-    chunk = js[idx:idx + 300]
-    assert "健康检查" in chunk
+    import re
+    match = re.search(r'"ProviderUnavailableError"\s*:\s*"([^"]+)"', js)
+    assert match, "ProviderUnavailableError map entry not found in formatUserError"
+    assert "健康检查" in match.group(1)
 
 
 def test_format_user_error_handles_script_read() -> None:
@@ -360,10 +371,10 @@ def test_format_user_error_handles_script_read() -> None:
     'script read failed' friendly message."""
 
     js = _read("app.js")
-    idx = js.find("ScriptReadError")
-    assert idx != -1
-    chunk = js[idx:idx + 200]
-    assert "剧本" in chunk
+    import re
+    match = re.search(r'"ScriptReadError"\s*:\s*"([^"]+)"', js)
+    assert match, "ScriptReadError map entry not found in formatUserError"
+    assert "剧本" in match.group(1)
 
 
 def test_format_user_error_unknown_fallback() -> None:
@@ -399,6 +410,99 @@ def test_app_js_catches_use_formatUserError() -> None:
         assert legacy not in js, (
             f"legacy raw-err.message toast still present: {legacy!r}"
         )
+
+
+# --- P0A-3 round-4: api() -> formatUserError chain ------------------------
+
+
+def test_app_js_api_attaches_detail_to_error() -> None:
+    """P0A-3 round-4 fix: when fetch returns a non-2xx response,
+    the api() function must parse the {detail: {error, message}} JSON
+    body and attach it to the thrown Error's `.detail` property so
+    formatUserError can pick the right mapping.
+
+    Without this, run-btn / batch-btn catch blocks would only see the
+    raw error.message string and would NOT translate
+    BrokenReferenceError / ProviderOutputError / ConfigError to
+    friendly Chinese text.
+    """
+
+    js = _read("app.js")
+    # The api() function body must have an `err.detail = detail` line.
+    api_idx = js.find("async function api")
+    assert api_idx != -1, "api() function not found in app.js"
+    # Find the matching closing brace (simple heuristic: next 'function ' or end of IIFE)
+    body_end = js.find("\n  }\n", api_idx)
+    assert body_end != -1, "could not locate api() body end"
+    body = js[api_idx:body_end]
+    # The fix: parse JSON then `err.detail = detail`
+    assert "err.detail" in body, (
+        "api() must attach err.detail = ... to the thrown Error so "
+        "formatUserError can map by errType = err.detail.error"
+    )
+    assert "detail = (await resp.json()).detail" in body or "detail = (await resp.json())" in body, (
+        "api() must parse the FastAPI {detail: {error, message}} shape"
+    )
+
+
+def test_app_js_formatUserError_reads_err_detail_error() -> None:
+    """P0A-3: formatUserError must read `err.detail.error` (the
+    engineering class name from the backend) to look up the
+    friendly mapping. Without this, no PlannerError subclass would
+    ever hit the friendly branch."""
+
+    js = _read("app.js")
+    fmt_idx = js.find("function formatUserError")
+    assert fmt_idx != -1, "formatUserError function not found"
+    body_end = js.find("\n  }\n", fmt_idx)
+    assert body_end != -1
+    body = js[fmt_idx:body_end]
+    # Must read err.detail.error (not err.name, not err.type)
+    assert "err.detail.error" in body, (
+        "formatUserError must read err.detail.error to map PlannerError "
+        "subclass names to friendly text"
+    )
+
+
+def test_app_js_api_to_formatUserError_chain_integration() -> None:
+    """P0A-3 round-4: the api() → formatUserError chain is wired
+    correctly. This is a source-level integration test:
+      1. api() throws Error with err.detail set to the parsed JSON
+      2. formatUserError reads err.detail.error to pick the mapping
+      3. The 3 catch blocks (run / batch / upload) call formatUserError
+    If any of these three links is broken, BrokenReferenceError
+    surfaces as a raw engineering class name to the user."""
+
+    js = _read("app.js")
+    import re
+
+    # 1. api() must have `err.detail =` assignment
+    api_idx = js.find("async function api")
+    api_body_end = js.find("\n  }\n", api_idx)
+    api_body = js[api_idx:api_body_end]
+    assert re.search(r"err\.detail\s*=", api_body), (
+        "api() must assign err.detail to the thrown Error"
+    )
+
+    # 2. formatUserError must read err.detail.error
+    fmt_idx = js.find("function formatUserError")
+    fmt_body_end = js.find("\n  }\n", fmt_idx)
+    fmt_body = js[fmt_idx:fmt_body_end]
+    assert re.search(r"err\.detail\.error", fmt_body), (
+        "formatUserError must read err.detail.error"
+    )
+
+    # 3. The 3 catch sites in bindRunControls call formatUserError
+    # (already covered by test_app_js_catches_use_formatUserError, but
+    # the chain integration test asserts ALL 3 links hold together)
+    catches_with_format = re.findall(
+        r"}\s*catch\s*\(\s*\w+\s*\)\s*{\s*showToast\(\s*formatUserError",
+        js,
+    )
+    assert len(catches_with_format) >= 3, (
+        f"expected ≥3 catch blocks calling showToast(formatUserError(...)); "
+        f"found {len(catches_with_format)}"
+    )
 
 
 # --- P0A-4: out-dir live preview ----------------------------------------
