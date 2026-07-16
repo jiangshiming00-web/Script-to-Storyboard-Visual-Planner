@@ -278,3 +278,63 @@ def test_agent_cli_does_not_leak_traceback(project_root: Path, tmp_path: Path) -
     assert "Traceback" not in result.stderr, (
         f"Traceback leaked to user: {result.stderr[:500]}"
     )
+
+
+# ---- P0A-5: production upload writes to app-data (not repo-internal) -----
+
+
+def test_production_upload_writes_to_app_data(
+    monkeypatch, project_root: Path, tmp_path: Path
+) -> None:
+    """P0A-5: under production env, /api/upload-script MUST write the
+    uploaded .txt to the OS app-data root (controlled via
+    PLANNER_APP_DATA_ROOT for hermetic tests), NEVER to the project
+    repository's ``runs/`` tree.
+
+    This pins red-line #4 (no repo-internal production artifacts) for
+    the upload endpoint specifically.
+    """
+
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+
+    from fastapi.testclient import TestClient
+
+    from planner.web.app import create_app
+
+    # Isolate app-data to a tmp dir so we don't pollute the host's
+    # actual ~/Library/Application Support/ShortDramaPlanner.
+    app_data = tmp_path / "app_data"
+    app_data.mkdir()
+    monkeypatch.setenv("PLANNER_APP_DATA_ROOT", str(app_data))
+
+    # Build a production config that is allowed (production.example.json
+    # has production.locked keys set). We point the app at the example
+    # config via repo_root.
+    prod_cfg = project_root / "config" / "production.example.json"
+    assert prod_cfg.exists(), (
+        "production.example.json must exist as a test fixture"
+    )
+
+    repo = project_root  # use the real repo so /api/config can load
+
+    app = create_app(repo_root=repo)
+    client = TestClient(app)
+
+    payload = b"EP01\nscene 1\n"
+    resp = client.post(
+        "/api/upload-script",
+        files={"file": ("EP01.txt", payload, "text/plain")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    saved = Path(body["saved_path"])
+
+    # The saved file MUST live under PLANNER_APP_DATA_ROOT/uploaded_scripts/.
+    assert saved.resolve().is_relative_to(app_data.resolve()), (
+        f"production upload leaked outside app-data root: {saved}"
+    )
+    # And NOT under the project repository.
+    assert not saved.resolve().is_relative_to(repo.resolve()), (
+        f"production upload wrote inside the repo: {saved}"
+    )

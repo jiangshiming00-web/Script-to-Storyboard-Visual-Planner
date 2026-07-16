@@ -186,15 +186,30 @@
   // ---- upload + run --------------------------------------------------
 
   async function uploadScript(file) {
-    const fd = new FormData();
+    var fd = new FormData();
     fd.append("file", file);
-    const resp = await fetch("/api/upload-script", { method: "POST", body: fd });
+    var resp;
+    try {
+      resp = await fetch("/api/upload-script", { method: "POST", body: fd });
+    } catch (networkErr) {
+      // Network / fetch-level error (server unreachable, CORS, etc.)
+      var err = new Error("网络错误，无法连接服务器。");
+      err.detail = null;
+      throw err;
+    }
     if (!resp.ok) {
-      const detail = await resp.json().catch(() => ({}));
-      throw new Error(
-        (detail && detail.detail && detail.detail.message) ||
-          "上传失败（HTTP " + resp.status + ")"
-      );
+      // Parse {detail: {error, message}} from response and attach to
+      // the Error so formatUserError can map by error type
+      // (UploadValidationError → "上传失败 ..." prefix).
+      var detail = null;
+      try {
+        detail = (await resp.json()).detail;
+      } catch (_) {
+        // body wasn't JSON; keep detail null
+      }
+      var err2 = new Error("Upload failed");
+      err2.detail = detail;
+      throw err2;
     }
     return resp.json();
   }

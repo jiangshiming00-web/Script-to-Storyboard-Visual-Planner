@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -460,16 +461,77 @@ def make_router(service: RunService) -> APIRouter:
 
     @router.post("/upload-script")
     async def upload_script(file: UploadFile = File(...)) -> dict:
+        # P0A-5: validate filename / extension / size BEFORE write.
+        # No new exception class: HTTPException(detail={error, message})
+        # matches the existing web-layer convention (see classify() and
+        # other routes in this file). The frontend formatUserError()
+        # matches "UploadValidationError" to its upload-failure prefix.
+
+        # 1. filename path-traversal (reject / \\ .. null byte)
+        name = file.filename or ""
+        if not name:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "UploadValidationError",
+                    "message": "文件名为空。",
+                },
+            )
+        if any(c in name for c in ("/", "\\", "\x00")) or ".." in name:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "UploadValidationError",
+                    "message": (
+                        f"文件名包含非法字符（/ \\\\ .. 或 null byte）：{name!r}"
+                    ),
+                },
+            )
+
+        # 2. extension whitelist (.txt only in P0A; .docx deferred to P1)
+        ext = Path(name).suffix.lower()
+        if ext != ".txt":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "UploadValidationError",
+                    "message": (
+                        f"仅支持 .txt 文件（.docx 在 v1.0 P1 支持；.doc 不支持）。"
+                        f"收到：{ext!r}"
+                    ),
+                },
+            )
+
+        # 3. size cap (env var overridable for tests; default 10MB)
+        max_bytes = int(
+            os.environ.get("PLANNER_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024))
+        )
+
         contents = await file.read()
+        if len(contents) > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "UploadValidationError",
+                    "message": (
+                        f"文件过大：{len(contents)} 字节 > 上限 {max_bytes} 字节。"
+                    ),
+                },
+            )
         if not contents:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "BadRequest", "message": "Empty file upload."},
+                detail={
+                    "error": "UploadValidationError",
+                    "message": "空文件。",
+                },
             )
+
+        # 4. write (unchanged from v3.0)
         sha = hashlib.sha256(contents).hexdigest()
         upload_dir = os_app_data_dir() / "uploaded_scripts"
         upload_dir.mkdir(parents=True, exist_ok=True)
-        target = upload_dir / f"{sha}.txt"
+        target = upload_dir / f"{sha}.txt"  # extension forced; sha name is safe
         if not target.exists():
             # Atomic-ish: write to .tmp then rename so a half-written
             # file never lands in the upload dir.
@@ -480,7 +542,7 @@ def make_router(service: RunService) -> APIRouter:
             "saved_path": str(target),
             "size_bytes": len(contents),
             "sha256": sha,
-            "filename": file.filename or "",
+            "filename": name,
         }
 
     return router

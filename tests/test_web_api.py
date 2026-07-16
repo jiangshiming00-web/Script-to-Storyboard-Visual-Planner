@@ -522,12 +522,85 @@ def test_validate_endpoint_after_run(app_with_repo, sample_script):
 
 
 def test_upload_empty_file_rejected(app_with_repo):
+    """P0A-5: empty .txt upload is rejected with
+    error=UploadValidationError (so frontend formatUserError picks
+    the upload prefix)."""
+
     client, _ = app_with_repo
     resp = client.post(
         "/api/upload-script",
         files={"file": ("empty.txt", b"", "text/plain")},
     )
     assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "UploadValidationError"
+    assert "空" in detail["message"]
+
+
+def test_upload_rejects_non_txt(app_with_repo):
+    """P0A-5: non-.txt extensions are rejected. .docx is deferred to
+    v1.0 P1; .doc is not supported (UI will guide the user to
+    convert)."""
+
+    client, _ = app_with_repo
+    resp = client.post(
+        "/api/upload-script",
+        files={"file": ("movie.mov", b"FAKEMOV", "video/quicktime")},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "UploadValidationError"
+    assert ".txt" in detail["message"]
+
+
+def test_upload_rejects_oversize(app_with_repo, monkeypatch):
+    """P0A-5: files larger than PLANNER_UPLOAD_MAX_BYTES (default
+    10MB) are rejected."""
+
+    client, _ = app_with_repo
+    monkeypatch.setenv("PLANNER_UPLOAD_MAX_BYTES", "100")
+    # Send 200 bytes; cap is 100
+    resp = client.post(
+        "/api/upload-script",
+        files={"file": ("big.txt", b"x" * 200, "text/plain")},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "UploadValidationError"
+    assert "过大" in detail["message"]
+
+
+def test_upload_rejects_path_traversal_filename(app_with_repo):
+    """P0A-5: filenames containing path traversal sequences (.. or /)
+    are rejected even if the extension is .txt."""
+
+    client, _ = app_with_repo
+    resp = client.post(
+        "/api/upload-script",
+        files={"file": ("../../etc/passwd.txt", b"hello", "text/plain")},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "UploadValidationError"
+    assert "非法字符" in detail["message"] or ".." in detail["message"]
+
+
+def test_upload_accepts_txt(app_with_repo):
+    """P0A-5: a valid .txt file is accepted and saved to the OS
+    app-data dir under uploaded_scripts/<sha>.txt."""
+
+    client, _ = app_with_repo
+    payload = b"EP01\n\nscene 1\n"
+    resp = client.post(
+        "/api/upload-script",
+        files={"file": ("EP01.txt", payload, "text/plain")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["size_bytes"] == len(payload)
+    saved = Path(body["saved_path"])
+    assert saved.exists()
+    assert saved.read_bytes() == payload
 
 
 def test_upload_writes_to_app_data(app_with_repo):
