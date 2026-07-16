@@ -73,6 +73,57 @@
     return resp.json();
   }
 
+  // ---- error formatting (P0A-3) ---------------------------------------
+
+  // formatUserError: turn a server / network error into a user-friendly
+  // message. The server returns a stable JSON shape
+  // {error: <type>, message: <raw>}; the type is engineering semantics,
+  // the message may be technical. This helper translates the type into
+  // a human sentence and appends the raw message in parentheses for
+  // debugging. Unknown types fall back to a generic sentence. No
+  // traceback is ever shown (the backend filters tracebacks at the
+  // HTTP boundary; see planner/web/app.py::_planner_error_handler).
+  function formatUserError(err) {
+    var errType = null;
+    var rawMsg = "";
+    if (err && typeof err === "object") {
+      if (err.detail && err.detail.error) {
+        errType = err.detail.error;
+        rawMsg = err.detail.message || "";
+      } else if (err.message) {
+        rawMsg = err.message;
+      }
+    } else if (typeof err === "string") {
+      rawMsg = err;
+    }
+    var map = {
+      "BrokenReferenceError":
+        "分镜表里有引用了不存在的角色 / 场景 / 道具 ID。建议检查 shot_list 和 bibles 的一致性，或切到 deterministic 重新生成。",
+      "ProviderOutputError":
+        "模型返回的格式无法解析（可能是 JSON 不合法或字段缺失）。建议：① 重试一次；② 切到 deterministic 模式；③ 检查 base_url / model 配置。",
+      "ConfigError":
+        "配置问题。",
+      "EnvironmentBoundaryError":
+        "环境 / 路径问题。",
+      "ProviderUnavailableError":
+        "模型未通过健康检查。可切到 deterministic 或检查 API key env var 是否设置。",
+      "ScriptReadError":
+        "剧本读取失败。请检查文件路径 / 编码 / 大小。",
+    };
+    var prefix = "运行失败";
+    if (errType && map[errType]) {
+      prefix = map[errType];
+    } else if (errType === "UploadValidationError") {
+      prefix = "上传失败";
+    } else if (errType) {
+      prefix = "运行失败（" + errType + "）";
+    }
+    if (rawMsg) {
+      return prefix + " 详情：" + rawMsg;
+    }
+    return prefix;
+  }
+
   // ---- env tabs ------------------------------------------------------
 
   function bindEnvTabs() {
@@ -122,7 +173,7 @@
         $("script-path").value = result.saved_path;
         showToast("已上传 " + file.name, "info");
       } catch (err) {
-        showToast("上传失败：" + err.message, "error");
+        showToast(formatUserError(err), "error");
       }
     });
 
@@ -147,7 +198,7 @@
         state.runIds.add(result.run_id);
         await refreshRuns();
       } catch (err) {
-        showToast("运行失败：" + err.message, "error");
+        showToast(formatUserError(err), "error");
       }
     });
 
@@ -173,7 +224,7 @@
         );
         await refreshRuns();
       } catch (err) {
-        showToast("批量任务失败：" + err.message, "error");
+        showToast(formatUserError(err), "error");
       }
     });
   }

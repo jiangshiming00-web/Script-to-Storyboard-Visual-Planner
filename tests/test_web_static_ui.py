@@ -283,6 +283,124 @@ def test_create_app_serves_static_index(tmp_path: Path) -> None:
 # --- wheel includes the static bundle ---------------------------------
 
 
+# --- P0A-3: frontend formatUserError -----------------------------------
+
+
+def test_app_js_has_formatUserError_function() -> None:
+    """P0A-3: app.js defines a `formatUserError(err)` function that
+    maps backend error types to user-friendly text."""
+
+    js = _read("app.js")
+    assert "function formatUserError" in js, (
+        "app.js must define formatUserError(err) per P0A-3"
+    )
+
+
+def test_format_user_error_handles_broken_reference() -> None:
+    """P0A-3: formatUserError maps BrokenReferenceError to a
+    'shot list references missing ID' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find("BrokenReferenceError")
+    assert idx != -1
+    # Look at the next 500 chars (the mapping body)
+    chunk = js[idx:idx + 500]
+    assert "分镜" in chunk or "引用" in chunk, (
+        "BrokenReferenceError mapping should mention 分镜 or 引用"
+    )
+
+
+def test_format_user_error_handles_provider_output() -> None:
+    """P0A-3: formatUserError maps ProviderOutputError to a
+    'model returned unparseable format' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find("ProviderOutputError")
+    assert idx != -1
+    chunk = js[idx:idx + 500]
+    assert "模型返回" in chunk or "格式无法解析" in chunk, (
+        "ProviderOutputError mapping should mention 模型返回 or 格式无法解析"
+    )
+
+
+def test_format_user_error_handles_config() -> None:
+    """P0A-3: formatUserError maps ConfigError to a 'configuration' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find('"ConfigError"')
+    assert idx != -1
+    chunk = js[idx:idx + 200]
+    assert "配置" in chunk
+
+
+def test_format_user_error_handles_environment_boundary() -> None:
+    """P0A-3: formatUserError maps EnvironmentBoundaryError to a
+    'environment / path' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find("EnvironmentBoundaryError")
+    assert idx != -1
+    chunk = js[idx:idx + 200]
+    assert "环境" in chunk or "路径" in chunk
+
+
+def test_format_user_error_handles_provider_unavailable() -> None:
+    """P0A-3: formatUserError maps ProviderUnavailableError to a
+    'model failed health check' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find("ProviderUnavailableError")
+    assert idx != -1
+    chunk = js[idx:idx + 300]
+    assert "健康检查" in chunk
+
+
+def test_format_user_error_handles_script_read() -> None:
+    """P0A-3: formatUserError maps ScriptReadError to a
+    'script read failed' friendly message."""
+
+    js = _read("app.js")
+    idx = js.find("ScriptReadError")
+    assert idx != -1
+    chunk = js[idx:idx + 200]
+    assert "剧本" in chunk
+
+
+def test_format_user_error_unknown_fallback() -> None:
+    """P0A-3: formatUserError falls back to '运行失败' for unknown
+    error types (defensive UX — never leak the engineering class
+    name in an unstructured way)."""
+
+    js = _read("app.js")
+    # The fallback prefix is the string literal "运行失败"
+    assert '"运行失败"' in js or "'运行失败'" in js, (
+        "formatUserError must have a 运行失败 fallback prefix"
+    )
+
+
+def test_app_js_catches_use_formatUserError() -> None:
+    """P0A-3: the 3 catch blocks in bindRunControls (upload / run /
+    batch) must use formatUserError(err) — no raw err.message."""
+
+    js = _read("app.js")
+    # count formatUserError calls
+    import re
+    calls = re.findall(r"formatUserError\s*\(", js)
+    assert len(calls) >= 4, (
+        f"expected at least 4 formatUserError() calls "
+        f"(definition + 3 catch sites); found {len(calls)}"
+    )
+    # And the 3 legacy raw-err.message patterns are gone
+    for legacy in [
+        '"上传失败：" + err.message',
+        '"运行失败：" + err.message',
+        '"批量任务失败：" + err.message',
+    ]:
+        assert legacy not in js, (
+            f"legacy raw-err.message toast still present: {legacy!r}"
+        )
+
+
 # --- P0A-2: first-screen workflow rearrangement --------------------------
 
 
