@@ -1,5 +1,69 @@
 # Handoff
 
+## 当前状态（2026-07-16 - Phase 3 P3 P0A landed：safe startup + first screen + errors + outdir + upload，等 Codex 手工复审 + push）
+
+按 Codex（用户手工对手方）round-3 verdict PASS + codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3，P1 必修 + P2 顺手补 + P3 选做），P0A 5 项全部落地（7 commit 拆开）。本地已 ahead origin/main 6 commits（含 c0cac53 翻译 commit）；`git push` 在 Codex 复审 verdict PASS 后执行。
+
+### P0A 落地清单（7 commit）
+
+| commit | 文件 | 说明 |
+|---|---|---|
+| `9e58a7c` | `scripts_entry.py` / `launcher.py` / `test_web_launcher_import.py` | P0A-1 safe startup：默认 headless + `--window` 显式 + `--no-window` deprecation + headless banner + 端口释放 subprocess test |
+| `9601171` | `index.html` / `style.css` / `test_web_static_ui.py` | P0A-2 first screen：intro 提示 + script-path primary (推荐) + 4 个 `<details>` 默认关闭 + `高级：模型与 API key` carve-out |
+| `366c926` | `app.js` / `test_web_static_ui.py` | P0A-3 formatUserError：5 类 PlannerError + UploadValidationError + 兜底；3 个 catch 替换 |
+| `f822b02` | `test_web_api.py` | P0A-3 契约测试：backend 返稳定 `{error, message}`，**不含** frontend 友好关键词（防 refactor 漏契约） |
+| `efc3720` | `app.js` / `test_web_static_ui.py` | P0A-4 out-dir preview：前端实时估算（精度到秒，UX 非契约） |
+| `ae73c23` | `routes.py` / `app.js` / `test_web_api.py` / `test_boundaries.py` | P0A-5 upload validation：.txt / 10MB / filename path-traversal / production 写 app-data 边界 |
+
+### 验证
+
+- `python3 -m pytest` —— **502 passed, 2 warnings in 30.17s**（473 baseline + 29 P0A 新增；0 回归）
+- `python3 -m json.tool PROJECT_STATUS.json` —— 通过
+- `git diff --check` —— clean
+- `runs/` —— 仅含根 `.gitkeep`
+- 7 commit 全部 `git log --format=%s` 简明标注 round + 文件类别
+
+### P0A 边界（守住）
+
+- ❌ P0B（结果页业务化 7 tab + GUI 导出）—— 下轮
+- ❌ P1（.docx / .doc 转换提示 / production UI 锁 / 4s 轮询停止）—— P1 轮
+- ❌ GUI agent panel —— 等 P0A + P0B + P1 全过
+- ❌ Core-3 / pkg-1 / ci-1 / executor adapter —— 等产品主路径全过
+- ❌ SIGTERM handler / background / PID-file —— P2 轮
+- ❌ 改 `c0cac53` 翻译 commit（carve-out 之外）
+- ❌ 改 `planner/providers/*` / `planner/agent/*` / `planner/pipeline.py` / `planner/cli.py` / `planner/validate.py` / `planner/batch.py` / `planner/model_config.py` / `planner/export.py` / `planner/exceptions.py` / `config/*` / `pyproject.toml [project]`
+
+### 候补 next_actions（按 brief v3 §5 顺序）
+
+1. `phase3_p3_product_usability_reset_p0b_result_page_export` —— P0B 实施轮（结果页 7 tab + GUI 导出 markdown/html/csv）
+2. `phase3_p3_product_usability_reset_p1_docx_input_polish` —— P1 实施轮
+3. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` —— 等 P0A + P0B + P1 全过再开
+4. `zcode_implement_continuity_audit_phase2_post_agent_p1` —— 独立轨道
+5. `core3_*` / `core4_*` / `core6_*` —— 延后
+6. `pkg1_*` / `ci1_*` —— 延后
+7. `design_phase3_executor_adapter_interface` —— 延后
+
+### Codex 手工复审重点（实施完成后由 Codex 拍板）
+
+1. P0A-1 默认 headless 行为：跑 `planner-web`（无 flag）→ 终端打 `planner-web ready → http://127.0.0.1:8765/  (Ctrl-C to stop)`；不弹 native window；切到另一个 Proma 项目对话键入文字不受干扰
+2. P0A-1 `--window` 显式开窗 + `--no-window` deprecation warning 文案（**不指向 --window**）
+3. P0A-2 第一屏布局：intro 提示 + script-path (推荐) + 4 个 `<details>` 默认关闭
+4. P0A-2 carve-out：`高级：模型与 API key` 是唯一修改的 c0cac53 翻译字符串
+5. P0A-3 错误友好：跑一个 broken reference 场景，toast 显"分镜表里有引用了不存在的角色..."而非 raw traceback
+6. P0A-4 out-dir 实时 preview：填 /tmp/test → preview 实时显示 `/tmp/test/<yyyyMMdd-HHMMSS>/`
+7. P0A-5 upload 校验：拖 .mov → toast 显"上传失败：仅支持 .txt 文件..."；拖 11MB → toast 显"文件过大：..."
+8. c0cac53 翻译字符串全部保留（除上述 1 处 carve-out）
+9. 红线守门：production 不写仓内；production upload 走 app-data；production 不 silent fallback
+10. `git push` 前确认本地 6 commits 都已通过 review
+
+### 给下一轮接手的 AI（Step 7 启动 P0B 时读）
+
+- 入口：`PROJECT_STATUS.json::phase` 待更新为 `v10_phase3_p3_product_usability_reset_p0b_landed`（P0B 落地后）
+- 必读：`product_usability_reset.md` v3 §4 P0B（P0B-1 + P0B-2 范围）/ `phase3_p3_p0a_impl_brief.md` v1.1（参考结构）
+- 不复述：P0A 5 项（已落地）/ c0cac53 翻译 carve-out 理由（CHANGELOG 有）/ formatUserError 契约（CHANGELOG 有）
+- 不动：`planner/providers/*` / `planner/agent/*` / `planner/pipeline.py` / `planner/cli.py` / `planner/validate.py` / `planner/batch.py` / `planner/model_config.py` / `planner/export.py` / `planner/exceptions.py` / `config/*` / `pyproject.toml [project]`
+- 进入 P0B 流程：写 impl brief（落 `.context/plan/phase3_p3_p0b_impl_brief.md`）→ user-ack → 派 codex-review 子会话预审 → 实施 + 三件套 → Codex 复审 → push
+
 ## 当前状态（2026-07-16 - Phase 3 P2 provider probe 闭环 + push 到 origin/main）
 
 按 Codex 手工对手方对 probe Round 2 (`ce962d3`) + Round 2 P3 cleanup (`f1c6c1b`) + status closeout (`96ea11c`) 的三轮复审 verdict **PASS**，Phase 3 P2 provider probe 正式闭环，已上 origin/main（`856a2d2..96ea11c` 3 commits）。下一轮待 user-ack 从 `next_actions` 选一项启动。

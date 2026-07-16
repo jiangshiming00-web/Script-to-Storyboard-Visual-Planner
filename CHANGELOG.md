@@ -2,6 +2,78 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-16 (Proma Phase 3 P3 - P0A landed: safe startup + first screen + errors + outdir + upload)
+
+按 Codex（用户手工对手方）round-3 verdict PASS 进入 P0A 实施轮；codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3），P1 已修齐，P2 顺手补，P3 选做。**5 项 P0A 落地**（7 commit），等 Codex 手工复审 + push。
+
+### Added（按 P0A-1..5 顺序）
+
+- **`planner/web/scripts_entry.py`** (P0A-1)
+  - 改默认：no flag → `launch_server_only`（headless），不再开 pywebview 抢焦点
+  - 新增 `--window` flag：显式开 pywebview native window
+  - `--no-window` 保留为 deprecation alias（stderr 一行 warning，**不指向 --window** per v3 round-2 cleanup）
+  - `--help` 增 Safe Start / Safe Stop / 故障恢复 章节（`RawDescriptionHelpFormatter`）
+- **`planner/web/launcher.py`** (P0A-1)
+  - `launch_server_only` 启动后打印一行 headless banner 到 stdout：`planner-web ready → http://<host>:<port>/  (Ctrl-C to stop)`
+  - `launch_desktop` 同（开窗前打 URL，operator 知道访问地址）
+  - `_signal_ready_when_started` 加 `stop_event` 参数：超时分支可主动停掉 ready-poll daemon（防御性，非 P0A 必用，但 P2 友好）
+- **`planner/web/static/index.html`** (P0A-2 / P0A-4)
+  - left panel 重排：intro 提示 → script-path primary group (含 `(推荐)`) → 运行按钮 primary-actions → 4 个 `<details>` 默认关闭（upload / out-dir with `#out-dir-preview` span / batch-scripts-dir / 高级：模型与 API key）
+- **`planner/web/static/style.css`** (P0A-2)
+  - 新增 `.intro` / `.group.primary` / `.button-row.primary-actions` 样式
+- **`planner/web/static/app.js`** (P0A-3 / P0A-4 / P0A-5)
+  - 新增 `formatUserError(err)` helper：5 类 PlannerError + UploadValidationError + 兜底 `运行失败` 前缀
+  - 3 个 catch block（upload / run / batch）改用 `formatUserError`，移除 raw `err.message` 拼接
+  - 新增 `bindOutDirPreview()`：监听 out-dir input 实时更新 `#out-dir-preview` 文本（精度到秒，UX 估算非契约）
+  - `uploadScript` 区分 network error / HTTP error，并把 `{detail: {error, message}}` 挂到 Error 对象供 formatUserError 取
+
+### Changed
+
+- `planner/web/routes.py` (P0A-5)：`upload_script` 重写，加 4 个 guard clause（filename path-traversal / ext whitelist / size cap / empty），错误统一用 `"UploadValidationError"` literal string in `HTTPException(detail=...)`（与既有 web 错误风格一致，**不新增**异常类）；新增 `import os`（PEP 8 字母序）
+- `harness/smoke_gui.py`：`_start_server` 去掉 `--no-window` flag（默认就是 headless，少一行 stderr noise）；`--help` 断言列表加 `--window`；docstring 同步
+
+### Tests（7 commit 拆分，每个 commit 自带测试）
+
+- `tests/test_web_launcher_import.py` (P0A-1) +4：default headless / --window explicit / --no-window deprecation warning (stderr 含"已不需要"，**不含** --window) / serve-then-stop releases port (subprocess e2e)
+- `tests/test_web_static_ui.py` (P0A-2 / P0A-3 / P0A-4) +16：intro 提示 / script-path 在 upload 之前 / left panel 0 个 `<details open>` / `高级：模型与 API key` carve-out / upload 折叠存在 / script-path-hint / out-dir-preview 节点 / 7 个 formatUserError 错误类型映射 / 兜底 `运行失败` / 3 个 legacy raw err.message 模式消失 / 3 个 bindOutDirPreview 行为
+- `tests/test_web_api.py` (P0A-3 / P0A-5) +5：backend stable error shape 契约 (asserts `"分镜" not in detail.message` 等 frontend 友好关键词) / upload rejects non-txt / oversize / path-traversal / accepts-txt
+- `tests/test_boundaries.py` (P0A-5) +1：production upload writes to app-data (用 `PLANNER_APP_DATA_ROOT` 隔离，断言 `saved_path` **不**在仓内)
+
+### carve-out from `c0cac53` (UI 翻译 commit)
+
+唯一修改的 zh-Hans 字符串：`<summary>模型设置</summary>` → `<summary>高级：模型与 API key</summary>`。理由：P0A-2 把"模型设置"折叠为高级（默认关闭），新 summary 让 operator 一眼看出这是"高级"操作。**所有其他 c0cac53 翻译字符（"分镜规划器" / "开发环境" / "运行" / "运行历史" / "剧本文本" / "上传剧本文本 (.txt)" / "运行单集" / "批量运行" / "尚未上传文件。" / "保存模型配置" / "模型配置尚未加载。" / "已加载自" / "已保存到" / "已使用回退" / "审计信息" / "产物计数" / "产物列表" / etc.）全部保留**。
+
+### 验证
+
+- `python3 -m pytest` —— **502 passed, 2 warnings in 30.17s**（473 baseline + 26 P0A 新增 + 3 boundary/contract 杂项；0 回归）
+- `python3 -c "import ast; [ast.parse(open(f).read()) for f in [...]]"` —— 0 syntax errors
+- `python3 -m json.tool PROJECT_STATUS.json` —— 通过
+- `git diff --check` —— clean
+- `runs/` —— 仅含根 `.gitkeep`（无仓内 production 产物）
+- 手动 smoke 计划见 `phase3_p3_p0a_impl_brief.md` §11 / `product_usability_reset.md` v3 §9
+
+### 不做（P0A 边界）
+
+- ❌ P0B（结果页业务化 7 tab + GUI 导出）—— 下轮
+- ❌ P1（.docx 输入 / .doc 转换提示 / production UI 锁 / 4s 轮询停止）—— P1 轮
+- ❌ GUI agent panel —— 等 P0A + P0B + P1 全过
+- ❌ Core-3 / pkg-1 / ci-1 / executor adapter 设计 —— 等产品主路径全过
+- ❌ SIGTERM handler / background / PID-file / atexit —— P2 轮
+- ❌ 替换 `c0cac53` 翻译 commit（carve-out 之外全部保留）
+- ❌ 改 `planner/providers/*` / `planner/agent/*` / `planner/pipeline.py` / `planner/cli.py` / `planner/validate.py` / `planner/batch.py` / `planner/model_config.py` / `planner/export.py` / `planner/exceptions.py` / `config/*` / `pyproject.toml [project]`
+
+### 候补 next_actions
+
+按 `product_usability_reset.md` v3 §5 顺序：
+
+1. `phase3_p3_product_usability_reset_p0b_result_page_export` —— P0B 实施轮（结果页 7 tab + GUI 导出 markdown/html/csv）
+2. `phase3_p3_product_usability_reset_p1_docx_input_polish` —— P1 实施轮（.docx + .doc 转换提示 + production UI 锁 + 4s 轮询停止 + 上传路径可见）
+3. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` —— 等 P0A + P0B + P1 全部通过后再开
+4. `zcode_implement_continuity_audit_phase2_post_agent_p1` —— 独立轨道
+5. `core3_add_planner_bible_merge_for_cross_episode_continuity` / `core4_*` / `core6_*` —— 延后
+6. `pkg1_add_pyinstaller_spec_*` / `ci1_add_github_actions_*` —— 延后
+7. `design_phase3_executor_adapter_interface` —— 延后
+
 ## 2026-07-16 (Proma Phase 3 P2 - provider probe status closeout + push to origin/main)
 
 按 Codex 手工对手方对 probe Round 2 (`ce962d3`) + Round 2 P3 cleanup (`f1c6c1b`) 的连续两轮复审 verdict **PASS**，本 commit 收口 Phase 3 P2 provider probe：状态推进 + push 到 origin/main + next_actions 提名。

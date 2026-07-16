@@ -1,9 +1,10 @@
 """Harness: GUI smoke for the v1.0 release.
 
-Boots ``planner-web --no-window`` as a real subprocess, waits for
-``/api/health`` to come up, then exercises every endpoint the
-frontend calls and the static asset bundle. Cleans up the server
-process at exit so CI never leaks orphaned uvicorn instances.
+Boots ``planner-web`` (default headless since Phase 3 P3 P0A-1) as a
+real subprocess, waits for ``/api/health`` to come up, then exercises
+every endpoint the frontend calls and the static asset bundle. Cleans
+up the server process at exit so CI never leaks orphaned uvicorn
+instances.
 
 What it covers
 --------------
@@ -156,7 +157,8 @@ def _wait_for_health(base_url: str, timeout: float = 15.0) -> None:
 
 
 def _start_server(port: int, scratch_app_data: Path) -> subprocess.Popen:
-    """Spawn ``planner-web --no-window`` and return the handle.
+    """Spawn ``planner-web`` (default headless since Phase 3 P3 P0A-1)
+    and return the handle.
 
     The process owns stdout/stderr pipes so the harness can show them
     on failure (the CLI uses stderr for the friendly error path).
@@ -174,7 +176,6 @@ def _start_server(port: int, scratch_app_data: Path) -> subprocess.Popen:
     proc = subprocess.Popen(
         [
             PYTHON, "-m", "planner.web",
-            "--no-window",
             "--host", HOST,
             "--port", str(port),
             "--repo-root", str(PROJECT_ROOT),
@@ -228,12 +229,12 @@ def step_help_text() -> None:
             f"[smoke_gui] planner-web --help failed rc={proc.returncode}\n"
             f"--- stderr ---\n{proc.stderr}"
         )
-    for needle in ("--no-window", "--host", "--port", "--repo-root"):
+    for needle in ("--window", "--no-window", "--host", "--port", "--repo-root"):
         if needle not in proc.stdout:
             raise SystemExit(
                 f"[smoke_gui] planner-web --help missing flag {needle!r}"
             )
-    _log("planner-web --help shows --no-window / --host / --port / --repo-root")
+    _log("planner-web --help shows --window / --no-window / --host / --port / --repo-root")
 
 
 def step_health(base_url: str) -> None:
