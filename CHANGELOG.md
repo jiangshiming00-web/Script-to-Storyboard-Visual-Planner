@@ -2,6 +2,60 @@
 
 所有重要项目变更都记录在这里。格式遵循"日期 - 变更 - 影响 - 验证状态"。
 
+## 2026-07-16 (Proma Phase 3 P2 - provider probe status closeout + push to origin/main)
+
+按 Codex 手工对手方对 probe Round 2 (`ce962d3`) + Round 2 P3 cleanup (`f1c6c1b`) 的连续两轮复审 verdict **PASS**，本 commit 收口 Phase 3 P2 provider probe：状态推进 + push 到 origin/main + next_actions 提名。
+
+### Status closeout（仅三件套文案，0 代码改动）
+
+- **`PROJECT_STATUS.json`**：
+  - `updated_at` → `2026-07-16`
+  - `phase` → `v10_phase3_p2_provider_probe_round2_closed`
+  - `status` → `v10_phase3_p2_provider_probe_round2_closed_and_pushed_to_origin_main`
+  - `completed_steps` 加 3 行：`...round2_p3_cleanup_landed` / `...round2_codex_pass_and_pushed_to_origin_main` / `...round2_closed`
+  - `next_actions` 移除 `phase3_p2_provider_probe_round2_codex_manual_re_review_pending`（已闭环）；`phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` 提名为 `[0]`（probe 自然延伸）；其余 8 项候补按"核心先于壳层 / 范围从大到小"排序
+- **`HANDOFF.md`**：
+  - 顶部章节从 "Round 2 landed，等 Codex 复审" → "probe 闭环 + push 到 origin/main"
+  - 列出 probe 完整 4-round 闭环清单（brief round-1/2 → Round 1 impl + status cleanup → Round 1 Codex fix → Round 2 tests/harness → Round 2 P3 cleanup → closeout）
+  - Probe 完整契约摘要（AND gate / 退出码表 / endpoint 拼接 / timeout / redaction / read-only / strict separation / settings fallback 8 条）
+  - "下一轮接手 AI 阅读顺序" 段新增
+- **`CHANGELOG.md`**：本段（即本 commit 自身）
+
+### 验证（closeout 阶段不引入新行为）
+
+- `python3 -m pytest` —— **473 passed, 2 warnings in 28.21s**（与 `ce962d3` 一致）
+- `python3 harness/agent_scenarios/run_all.py` —— **9 scenarios 全过**
+- `python3 -m json.tool PROJECT_STATUS.json` —— 通过
+- `git diff --check HEAD~1 HEAD` —— clean
+- `git status` —— working tree clean
+- `git log --oneline origin/main..HEAD` —— empty（本地与 origin 同步；`ce962d3` + `f1c6c1b` 已在 push 阶段提交到 origin）
+
+### 候补 next_actions（9 项，user-ack 选 1 启动）
+
+1. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` —— GUI 面板加 probe 按钮
+2. `core3_add_planner_bible_merge_for_cross_episode_continuity` —— 最大范围（review-batch rb1-rb3 漂移根治）
+3. `core4_add_planner_rebuild_prompts_diff_diff_episodes`
+4. `core4_add_planner_heuristics_density_min_characters_min_word_count`
+5. `core6_add_prompt_template_loader_optional_jinja2`
+6. `pkg1_add_pyinstaller_spec_infoplist_dual_platform_build_scripts`
+7. `ci1_add_github_actions_matrix_with_tag_triggered_release`
+8. `zcode_implement_continuity_audit_phase2_post_agent_p1`
+9. `design_phase3_executor_adapter_interface`
+
+### 红线守门
+
+- 0 代码 / 0 测试改动（纯三件套文案 + 状态推进）
+- `pyproject.toml [project]` 基础依赖未动（仍只 `pydantic + click`）
+- 仓库 `runs/` 仍只含根 `.gitkeep`
+- 473 pytest 全绿 / 9 harness scenarios 全过 / JSON validate / diff --check clean / 与 origin 同步
+
+### 不做（status closeout 边界）
+
+- 不重启 probe 改动（下次进 round 才动相关源文件）
+- 不实现 GUI 面板（user-ack 后单独 round 启动）
+- 不接 bible merge（user-ack 后单独 round 启动，独立范围最大）
+- 不改 brief / 不改 tests / 不改 harness
+
 ## 2026-07-15 (Proma Phase 3 P2 - provider probe Round 2 landed: tests + harness + P3 wording)
 
 Codex manual review of probe Round 1 Codex fix (`856a2d2`) verdict **PASS**，本轮按 Round 2 brief §4 落地 18 unit + 10 cli tests + 2 harness scenarios + 顺手修 Codex 标注的 non-blocking P3 wording + 推进 7 → 9 scenarios。Codex PASS 后即可 push。

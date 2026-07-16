@@ -1,8 +1,8 @@
 {
   "project": "Script-to-Storyboard Visual Planner",
-  "updated_at": "2026-07-15",
-  "phase": "v10_phase3_p2_provider_probe_round2_landed",
-  "status": "v10_phase3_p2_provider_probe_round2_landed_awaiting_codex_manual_re_review",
+  "updated_at": "2026-07-16",
+  "phase": "v10_phase3_p2_provider_probe_round2_closed",
+  "status": "v10_phase3_p2_provider_probe_round2_closed_and_pushed_to_origin_main",
   "owner_plan": {
     "codex": [
       "architecture_design",
@@ -154,7 +154,10 @@
     "phase3_p2_provider_probe_design_brief_landed",
     "phase3_p2_provider_probe_round1_implementation_landed",
     "phase3_p2_provider_probe_round1_codex_fix_landed",
-    "phase3_p2_provider_probe_round2_landed"
+    "phase3_p2_provider_probe_round2_landed",
+    "phase3_p2_provider_probe_round2_p3_cleanup_landed",
+    "phase3_p2_provider_probe_round2_codex_pass_and_pushed_to_origin_main",
+    "phase3_p2_provider_probe_round2_closed"
   ],
   "current_decisions": [
     "core_planner_is_tool_agnostic",
@@ -234,7 +237,6 @@
     "v10_phase2_harness_agent_scenarios_4_read_only_scenarios_with_approval_gate_shape_and_live_cross_check"
   ],
   "next_actions": [
-    "phase3_p2_provider_probe_round2_codex_manual_re_review_pending",
     "phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel",
     "core3_add_planner_bible_merge_for_cross_episode_continuity",
     "core4_add_planner_rebuild_prompts_diff_diff_episodes",

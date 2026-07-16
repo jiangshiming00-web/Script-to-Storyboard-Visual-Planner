@@ -1,5 +1,60 @@
 # Handoff
 
+## 当前状态（2026-07-16 - Phase 3 P2 provider probe 闭环 + push 到 origin/main）
+
+按 Codex 手工对手方对 probe Round 2 (`ce962d3`) 与 P3 cleanup (`f1c6c1b`) 的连续两轮复审 verdict **PASS**，本轮做 status closeout + push：probe Round 2 正式闭环，已上 origin/main（`856a2d2..f1c6c1b` 2 commits）。下一轮待 user-ack 从 `next_actions` 选一项启动。
+
+### Phase 3 P2 probe 闭环清单
+
+- **Round 0 brief** (`4121276`)：design brief round-1
+- **Round 0 brief round-2 fix** (`1576d20`)：4 finding 全部收口，brief 入库
+- **Round 1 implementation** (`0128dd1`)：brief §3 生产代码（base.py abstract + 4 adapter override + cli.py provider-probe + _probe_gate_open + ProviderProbeError）
+- **Round 1 status cleanup** (`b449f8c`)：三件套 P3 status cleanup
+- **Round 1 Codex fix** (`856a2d2`)：1 P1 redaction + 2 P2 timeout / default settings
+- **Round 2 tests + harness + P3 wording** (`ce962d3`)：18 unit + 10 cli + 2 harness scenarios + 顺手修 non-blocking P3 wording
+- **Round 2 P3 cleanup** (`f1c6c1b`)：4 个 non-blocking P3 全部收口（base.py 残留 wording / scenario overclaim / stale next_action / ahead origin 数字）
+- **本 commit (closeout)**：`status` → `...closed_and_pushed_to_origin_main` / `phase` → `...round2_closed` / `completed_steps` + closeout 锚点 / `next_actions` 移除复审 pending，GUI panel 提名为 next_actions[0]。
+
+### Probe 完整契约（brief §2 + §3 + §4 全部落地）
+
+- **AND gate**（strict `"1"` 匹配）：subcommand `planner provider-probe` + `PLANNER_PROBE=1` 双开；任一未开 → 一行 stderr policy refusal + exit 2，**零**网络
+- **退出码表**（与 brief §2.3 完全对齐）：gate close=2 / NotImpl=1 / unhealthy=2 / healthy=0
+- **endpoint 拼接**（round-1 P1 fix）：`base_url.rstrip("/") + "/models"`，**不**写死 `/v1` 前缀
+- **timeout**：`timeout_ms` CLI kwarg → `max(timeout_ms, 1) / 1000.0` socket timeout（v1.0 不做 separate outer wall-clock guard）
+- **redaction**：4 regex（Bearer / sk- / sk-ant- / gho_）+ `safe_url = _redact_secrets(url)` 在 happy/unhealthy/exception 3 处出口；真实 HTTP 请求仍用 raw url
+- **read-only**：probe 绝不写 `run_summary.json` / `probe_history.jsonl` / run dir；`forbidden_tool_calls` 显式 forbid 8 类写入路径
+- **strict separation**：probe 与 `health_check` 完全不互相调用（`inspect.getsource` 静态扫钉住）
+- **settings fallback**：CLI 显式 `--provider openai_compatible` + 无 model-config 时构造 `ModelProviderConfig(planner_provider="openai_compatible")` defaults（与 `health_check()` 镜像）
+
+### 红线守门（probe 闭环时最终态）
+
+- `pyproject.toml [project]` 基础依赖未动：仍只 `pydantic + click`；probe + tests + harness 全 stdlib（`subprocess` / `urllib` / `http.server` / `socket` / `threading` / `tempfile`）。
+- **473 pytest passed, 2 warnings in 28.21s**，0 回归
+- **9 harness scenarios 全过**（含 2 个 probe scenarios live replay）
+- 仓库 `runs/` 仍只含根 `.gitkeep`；smoke + tests 产物走 `/tmp` / `tmp_path`
+- production fail-closed + redact + read-only 全部保留
+- 4 路径 CLI smoke 全 0 traceback，exit code 与 brief §2.3 完全对齐
+- `git status` 与 `origin/main` 同步（`856a2d2..f1c6c1b` 已 push）
+
+### 候补 next_actions（9 项，按"核心先于壳层 / 范围从大到小"排序）
+
+1. `phase3_p2_optional_planner_agent_subcommand_inside_planner_web_for_gui_panel` —— **probe 通过后自然延伸**：GUI 面板加"probe 状态 / 调用 probe"按钮，与现有 agent diagnose / review-run / review-batch 同级
+2. `core3_add_planner_bible_merge_for_cross_episode_continuity` —— 最大范围（review-batch rb1-rb3 漂移问题的根治），独立 user-ack 启动
+3. `core4_add_planner_rebuild_prompts_diff_diff_episodes` —— 跨集 prompt 重生成 + diff
+4. `core4_add_planner_heuristics_density_min_characters_min_word_count` —— 启发式密度
+5. `core6_add_prompt_template_loader_optional_jinja2` —— prompt 模板 loader
+6. `pkg1_add_pyinstaller_spec_infoplist_dual_platform_build_scripts` —— Mac `.app` + Windows `.exe` 打包
+7. `ci1_add_github_actions_matrix_with_tag_triggered_release` —— tag-triggered release
+8. `zcode_implement_continuity_audit_phase2_post_agent_p1` —— Zcode 域（continuity audit）
+9. `design_phase3_executor_adapter_interface` —— Phase 3 executor adapter 设计（post-probe）
+
+### 给下一轮接手的 AI
+
+- **入口**：`PROJECT_STATUS.json` → `phase=v10_phase3_p2_provider_probe_round2_closed` / `next_actions[0]` 即本轮默认延续
+- **必读**：`docs/design/provider_probe_design.md`（Round 2 锁定 brief）/ `tests/test_provider_probe.py` + `tests/test_cli_provider_probe.py` + `harness/agent_scenarios/{provider_probe_opt_in,provider_probe_gate_closed}.json`
+- **不复述**：brief §2.7 strict separation / 4 regex redact 列表 / 4 路径 exit code 表（都已落地，不需重新设计）
+- **不动**：`planner/providers/{base,deterministic,openai_adapter,anthropic_adapter,openai_compatible_adapter}.py` probe 相关签名 + `planner/cli.py::provider_probe_cmd` 主循环（probe 闭环，下次进 round 才动）
+
 ## 当前状态（2026-07-15 - Phase 3 P2 probe Round 2 landed：tests + harness + P3 wording，等 Codex 复审放行后 push）
 
 按 Codex 手工对手方对 probe Round 1 Codex fix (`856a2d2`) 的复审 verdict **PASS**，本轮按 Round 2 brief §4 落地 18 unit + 10 cli tests + 2 harness scenarios + 顺手修 Codex 标注的 non-blocking P3 wording（"outer wall-clock timeout" → "socket timeout"）。`git push` 在 Codex 复审放行后即可执行。
