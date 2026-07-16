@@ -89,7 +89,7 @@
         });
         setEnvWarning();
         // Reset run list because env-scoped.
-        $("run-list").innerHTML = '<p class="hint">Loading…</p>';
+        $("run-list").innerHTML = '<p class="hint">加载中…</p>';
         refreshRuns();
       });
     });
@@ -105,7 +105,7 @@
       const detail = await resp.json().catch(() => ({}));
       throw new Error(
         (detail && detail.detail && detail.detail.message) ||
-          "Upload failed (HTTP " + resp.status + ")"
+          "上传失败（HTTP " + resp.status + ")"
       );
     }
     return resp.json();
@@ -118,18 +118,18 @@
       try {
         const result = await uploadScript(file);
         $("upload-status").textContent =
-          "Uploaded: " + file.name + " (" + result.size_bytes + " bytes)";
+          "已上传：" + file.name + "（" + result.size_bytes + " 字节）";
         $("script-path").value = result.saved_path;
-        showToast("Uploaded " + file.name, "info");
+        showToast("已上传 " + file.name, "info");
       } catch (err) {
-        showToast("Upload failed: " + err.message, "error");
+        showToast("上传失败：" + err.message, "error");
       }
     });
 
     $("run-btn").addEventListener("click", async () => {
       const scriptPath = $("script-path").value.trim();
       if (!scriptPath) {
-        showToast("Pick a script first.", "error");
+        showToast("请先选择剧本。", "error");
         return;
       }
       const body = {
@@ -141,20 +141,20 @@
       try {
         const result = await api("/api/runs", { method: "POST", body: body });
         showToast(
-          "Run started: " + result.run_id + " (" + result.status + ")",
+          "运行已启动：" + result.run_id + "（" + result.status + "）",
           "info"
         );
         state.runIds.add(result.run_id);
         await refreshRuns();
       } catch (err) {
-        showToast("Run failed: " + err.message, "error");
+        showToast("运行失败：" + err.message, "error");
       }
     });
 
     $("batch-btn").addEventListener("click", async () => {
       const scriptsDir = $("batch-scripts-dir").value.trim();
       if (!scriptsDir) {
-        showToast("Pick a batch scripts dir first.", "error");
+        showToast("请先选择批量剧本文本目录。", "error");
         return;
       }
       const body = {
@@ -168,12 +168,12 @@
       try {
         const result = await api("/api/batches", { method: "POST", body: body });
         showToast(
-          "Batch started: " + result.batch_id + " (" + result.status + ")",
+          "批量任务已启动：" + result.batch_id + "（" + result.status + "）",
           "info"
         );
         await refreshRuns();
       } catch (err) {
-        showToast("Batch failed: " + err.message, "error");
+        showToast("批量任务失败：" + err.message, "error");
       }
     });
   }
@@ -198,10 +198,10 @@
       $("enable-real-calls").checked = !!cfg.enable_real_model_calls;
       $("allow-fallback").checked = !!cfg.allow_provider_fallback;
       $("model-config-status").textContent =
-        "Loaded from " + (result.path || "(default)");
+        "已加载自 " + (result.path || "（默认）");
     } catch (err) {
       $("model-config-status").textContent =
-        "Failed to load model config: " + err.message;
+        "加载模型配置失败：" + err.message;
     }
   }
 
@@ -224,10 +224,10 @@
         });
         state.modelConfigPath = result.path || state.modelConfigPath;
         $("model-config-status").textContent =
-          "Saved to " + (result.path || "(default)");
-        showToast("Model config saved.", "info");
+          "已保存到 " + (result.path || "（默认）");
+        showToast("模型配置已保存。", "info");
       } catch (err) {
-        showToast("Save failed: " + err.message, "error");
+        showToast("保存失败：" + err.message, "error");
       }
     });
   }
@@ -241,14 +241,14 @@
       );
       renderRunList(result.runs || []);
     } catch (err) {
-      showToast("Failed to load runs: " + err.message, "error");
+      showToast("加载运行历史失败：" + err.message, "error");
     }
   }
 
   function renderRunList(runs) {
     const list = $("run-list");
     if (!runs.length) {
-      list.innerHTML = '<p class="hint">No runs yet.</p>';
+      list.innerHTML = '<p class="hint">暂无运行记录。</p>';
       return;
     }
     list.innerHTML = "";
@@ -270,13 +270,13 @@
     const drawer = $("run-drawer");
     const body = $("drawer-body");
     drawer.hidden = false;
-    body.innerHTML = '<p class="hint">Loading…</p>';
+    body.innerHTML = '<p class="hint">加载中…</p>';
     try {
       const result = await api("/api/runs/" + runId + "/summary");
       renderDrawer(result);
     } catch (err) {
       body.innerHTML =
-        '<p class="error">Failed to load run: ' +
+        '<p class="error">加载运行详情失败：' +
         err.message +
         "</p>";
     }
@@ -305,9 +305,9 @@
       : "";
     const fallbackBanner =
       summary.fallback_used
-        ? '<div class="banner banner-warning">Fallback was used. Effective provider: ' +
+        ? '<div class="banner banner-warning">已使用回退。实际模型来源：' +
           (summary.effective_provider || "?") +
-          ". Reason: " +
+          "。原因：" +
           (summary.fallback_reason || "?") +
           "</div>"
         : "";
@@ -325,7 +325,7 @@
           )
           .join("") +
         "</dl>"
-      : '<p class="hint">No artifacts yet.</p>';
+      : '<p class="hint">暂无产物。</p>';
     // run_summary.json's ``artifacts`` is a dict ``{name: path}``, not
     // an array. Older builds assumed ``.map()`` and crashed the drawer
     // when a completed run was opened. Normalize to a name list so
@@ -352,12 +352,12 @@
       .join("");
     body.innerHTML =
       fallbackBanner +
-      "<h4>Audit</h4><dl>" +
+      "<h4>审计信息</h4><dl>" +
       audit +
       "</dl>" +
-      "<h4>Counts</h4>" +
+      "<h4>产物计数</h4>" +
       countsHtml +
-      '<h4>Artifacts</h4><ul class="artifact-list">' +
+      '<h4>产物列表</h4><ul class="artifact-list">' +
       artifactLinks +
       "</ul>";
   }

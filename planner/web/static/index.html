@@ -1,92 +1,92 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hans">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Script-to-Storyboard Visual Planner</title>
+  <title>分镜规划器</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1>Script-to-Storyboard</h1>
-    <nav class="env-tabs" role="tablist" aria-label="Environment">
-      <button id="env-development" class="env-tab" type="button" role="tab" aria-selected="true">development</button>
-      <button id="env-production" class="env-tab" type="button" role="tab" aria-selected="false">production</button>
+    <h1>分镜规划器</h1>
+    <nav class="env-tabs" role="tablist" aria-label="环境">
+      <button id="env-development" class="env-tab" type="button" role="tab" aria-selected="true">开发环境</button>
+      <button id="env-production" class="env-tab" type="button" role="tab" aria-selected="false">生产环境</button>
     </nav>
     <div class="env-warning" id="env-warning" hidden>
-      <strong>production</strong> - runs go outside the repo and never overwrite existing runs.
+      <strong>生产环境</strong> - 运行产物落在仓库外，绝不覆盖已有运行。
     </div>
   </header>
 
   <main class="layout">
     <!-- LEFT COLUMN: controls -->
     <section class="panel" id="panel-controls" aria-labelledby="panel-controls-heading">
-      <h2 id="panel-controls-heading">Run</h2>
+      <h2 id="panel-controls-heading">运行</h2>
 
-      <!-- Model settings -->
+      <!-- 模型设置 -->
       <details class="group" open>
-        <summary>Model settings</summary>
-        <p class="hint">API keys are read from the named environment variable. The key value never leaves this machine.</p>
+        <summary>模型设置</summary>
+        <p class="hint">API 密钥从指定名称的环境变量读取，密钥值不会离开本机。</p>
         <label>Provider
           <select id="provider-select">
             <option value="deterministic">deterministic</option>
-            <option value="openai_compatible">openai_compatible (recommended for v1.0)</option>
-            <option value="openai">openai (skeleton - not implemented)</option>
-            <option value="anthropic">anthropic (skeleton - not implemented)</option>
+            <option value="openai_compatible">openai_compatible (推荐用于 v1.0)</option>
+            <option value="openai">openai (骨架 - 未实现)</option>
+            <option value="anthropic">anthropic (骨架 - 未实现)</option>
           </select>
         </label>
         <label>Model <input type="text" id="model-name" placeholder="gpt-4o-mini" /></label>
         <label>Base URL <input type="text" id="base-url" placeholder="https://api.openai.com/v1" /></label>
-        <label>API key env var <input type="text" id="api-key-env" placeholder="OPENAI_API_KEY" /></label>
+        <label>API key 环境变量名 <input type="text" id="api-key-env" placeholder="OPENAI_API_KEY" /></label>
         <label class="row">
           <input type="checkbox" id="enable-real-calls" />
-          <span>Enable real model calls (off by default)</span>
+          <span>启用真实模型调用（默认关闭）</span>
         </label>
         <label class="row">
           <input type="checkbox" id="allow-fallback" />
-          <span>Allow fallback to deterministic (development only)</span>
+          <span>允许回退到 deterministic（仅开发环境）</span>
         </label>
         <div class="button-row">
-          <button type="button" id="save-model-config-btn">Save model config</button>
-          <button type="button" id="probe-btn" class="secondary" disabled title="Coming in v1.1 - opt-in probe design is tracked in HANDOFF.md">Probe (v1.1)</button>
+          <button type="button" id="save-model-config-btn">保存模型配置</button>
+          <button type="button" id="probe-btn" class="secondary" disabled title="将在 v1.1 中提供 — opt-in 探测设计见 HANDOFF.md">探测 (v1.1)</button>
         </div>
-        <p class="hint" id="model-config-status">Model config not loaded yet.</p>
+        <p class="hint" id="model-config-status">模型配置尚未加载。</p>
       </details>
 
       <!-- Script selection -->
       <details class="group" open>
-        <summary>Script</summary>
-        <label>Upload (.txt)
+        <summary>剧本文本</summary>
+        <label>上传剧本文本 (.txt)
           <input type="file" id="upload-input" accept=".txt,text/plain" />
         </label>
-        <p class="hint" id="upload-status">No file uploaded.</p>
-        <label>Or pick an existing script
+        <p class="hint" id="upload-status">尚未上传文件。</p>
+        <label>或选择一个已有剧本
           <input type="text" id="script-path" placeholder="/absolute/path/to/script.txt" />
         </label>
-        <label>Output directory (optional)
+        <label>输出目录（可选）
           <input type="text" id="out-dir" placeholder="/tmp/storyboard-out" />
         </label>
-        <label>Batch scripts dir (optional)
+        <label>批量剧本文本目录（可选）
           <input type="text" id="batch-scripts-dir" placeholder="/path/to/scripts-dir" />
         </label>
         <div class="button-row">
-          <button type="button" id="run-btn">Run single episode</button>
-          <button type="button" id="batch-btn" class="secondary">Run batch</button>
+          <button type="button" id="run-btn">运行单集</button>
+          <button type="button" id="batch-btn" class="secondary">批量运行</button>
         </div>
       </details>
     </section>
 
     <!-- RIGHT COLUMN: history + drawer -->
     <section class="panel" id="panel-runs" aria-labelledby="panel-runs-heading">
-      <h2 id="panel-runs-heading">Run history</h2>
+      <h2 id="panel-runs-heading">运行历史</h2>
       <div class="run-list" id="run-list" aria-live="polite">
-        <p class="hint">No runs yet.</p>
+        <p class="hint">暂无运行记录。</p>
       </div>
 
       <aside class="drawer" id="run-drawer" hidden aria-labelledby="drawer-heading">
         <header>
-          <h3 id="drawer-heading">Run detail</h3>
-          <button type="button" id="drawer-close" aria-label="Close">×</button>
+          <h3 id="drawer-heading">运行详情</h3>
+          <button type="button" id="drawer-close" aria-label="关闭">×</button>
         </header>
         <div class="drawer-body" id="drawer-body"></div>
       </aside>
