@@ -2,7 +2,7 @@
 
 ## 当前状态（2026-07-16 - Phase 3 P2 provider probe 闭环 + push 到 origin/main）
 
-按 Codex 手工对手方对 probe Round 2 (`ce962d3`) 与 P3 cleanup (`f1c6c1b`) 的连续两轮复审 verdict **PASS**，本轮做 status closeout + push：probe Round 2 正式闭环，已上 origin/main（`856a2d2..f1c6c1b` 2 commits）。下一轮待 user-ack 从 `next_actions` 选一项启动。
+按 Codex 手工对手方对 probe Round 2 (`ce962d3`) + Round 2 P3 cleanup (`f1c6c1b`) + status closeout (`96ea11c`) 的三轮复审 verdict **PASS**，Phase 3 P2 provider probe 正式闭环，已上 origin/main（`856a2d2..96ea11c` 3 commits）。下一轮待 user-ack 从 `next_actions` 选一项启动。
 
 ### Phase 3 P2 probe 闭环清单
 
@@ -34,7 +34,7 @@
 - 仓库 `runs/` 仍只含根 `.gitkeep`；smoke + tests 产物走 `/tmp` / `tmp_path`
 - production fail-closed + redact + read-only 全部保留
 - 4 路径 CLI smoke 全 0 traceback，exit code 与 brief §2.3 完全对齐
-- `git status` 与 `origin/main` 同步（`856a2d2..f1c6c1b` 已 push）
+- `git status` 与 `origin/main` 同步（`856a2d2..96ea11c` 3 commits 已 push：Round 1 Codex fix + Round 2 tests/harness + Round 2 P3 cleanup + status closeout）
 
 ### 候补 next_actions（9 项，按"核心先于壳层 / 范围从大到小"排序）
 
