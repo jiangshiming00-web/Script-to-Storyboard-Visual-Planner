@@ -283,6 +283,106 @@ def test_create_app_serves_static_index(tmp_path: Path) -> None:
 # --- wheel includes the static bundle ---------------------------------
 
 
+# --- P0A-2: first-screen workflow rearrangement --------------------------
+
+
+def test_index_html_intro_prompt_present() -> None:
+    """P0A-2: an intro <p class=\"hint intro\"> sits at the top of the
+    left panel and explains the workflow: 导入剧本 → 跑 → 看结果."""
+
+    html = _read("index.html")
+    # Class-based selector: must be a <p class="hint intro">.
+    assert 'class="hint intro"' in html
+    # Workflow text must include the three steps.
+    assert "导入剧本" in html
+    assert "跑" in html
+    assert "看结果" in html
+
+
+def test_index_html_script_path_appears_before_upload() -> None:
+    """P0A-2: the direct-path <input id=\"script-path\"> must appear
+    BEFORE the <input type=\"file\" id=\"upload-input\"> in the source
+    so the direct path is the visually-primary script selector."""
+
+    html = _read("index.html")
+    script_idx = html.find('id="script-path"')
+    upload_idx = html.find('id="upload-input"')
+    assert script_idx != -1, "script-path input not found"
+    assert upload_idx != -1, "upload-input not found"
+    assert script_idx < upload_idx, (
+        "script-path must appear before upload-input in the source; "
+        f"got script_idx={script_idx}, upload_idx={upload_idx}"
+    )
+
+
+def test_index_html_no_open_details_in_panel_controls() -> None:
+    """P0A-2: the left panel (#panel-controls) has ZERO <details open>;
+    all groups are <details> default-closed."""
+
+    html = _read("index.html")
+    # Slice the left panel section.
+    start = html.find('id="panel-controls"')
+    assert start != -1, "panel-controls section not found"
+    end = html.find("</section>", start)
+    assert end != -1, "panel-controls section not closed"
+    panel = html[start:end]
+    import re
+    open_details = re.findall(r"<details[^>]*\bopen\b", panel)
+    assert open_details == [], (
+        f"panel-controls has {len(open_details)} <details open> tags; "
+        "P0A-2 requires all default-closed: " + repr(open_details)
+    )
+
+
+def test_index_html_model_settings_summary_mentions_advanced() -> None:
+    """P0A-2: the model settings <details> summary now reads
+    '高级：模型与 API key' (P0A carve-out from c0cac53)."""
+
+    html = _read("index.html")
+    assert "高级：模型与 API key" in html, (
+        "model settings summary must say '高级：模型与 API key' (P0A carve-out)"
+    )
+
+
+def test_index_html_upload_details_present() -> None:
+    """P0A-2: upload lives in a <details><summary>上传剧本文本 (.txt)</summary>."""
+
+    html = _read("index.html")
+    assert "上传剧本文本 (.txt)" in html
+    # And the upload input is INSIDE the <details>, not floating.
+    summary_idx = html.find("上传剧本文本 (.txt)")
+    closing_details = html.find("</details>", summary_idx)
+    upload_idx = html.find('id="upload-input"', summary_idx)
+    assert upload_idx != -1 and closing_details != -1 and upload_idx < closing_details, (
+        "upload input must be inside the upload <details> block"
+    )
+
+
+def test_index_html_has_script_path_hint() -> None:
+    """P0A-2: a hint node id=\"script-path-hint\" sits under the
+    script-path input, explaining the direct-path-first workflow."""
+
+    html = _read("index.html")
+    assert 'id="script-path-hint"' in html, (
+        "script-path-hint id missing from index.html"
+    )
+    # And the hint text mentions the upload fallback.
+    hint_idx = html.find('id="script-path-hint"')
+    chunk = html[hint_idx:hint_idx + 500]
+    assert "上传" in chunk, "script-path-hint should mention upload fallback"
+
+
+def test_index_html_has_out_dir_preview_node() -> None:
+    """P0A-4: an id=\"out-dir-preview\" span lives inside the output
+    directory details, where the live preview text is written by
+    app.js::bindOutDirPreview()."""
+
+    html = _read("index.html")
+    assert 'id="out-dir-preview"' in html
+    # Default text is the literal "默认子目录".
+    assert "默认子目录" in html
+
+
 def test_wheel_includes_static_bundle(tmp_path: Path) -> None:
     """Regression: Phase 3 ships the static UI; the wheel MUST carry
     ``planner/web/static/*`` so a teammate who runs ``pip install .``

@@ -23,10 +23,53 @@
     <section class="panel" id="panel-controls" aria-labelledby="panel-controls-heading">
       <h2 id="panel-controls-heading">运行</h2>
 
-      <!-- 模型设置 -->
-      <details class="group" open>
-        <summary>模型设置</summary>
-        <p class="hint">API 密钥从指定名称的环境变量读取，密钥值不会离开本机。</p>
+      <!-- P0A-2: intro prompt — one-line workflow at the top -->
+      <p class="hint intro">导入剧本 → 跑 → 看结果。第一步：粘贴剧本路径，或展开「上传」。</p>
+
+      <!-- P0A-2: script-path is the always-visible primary input -->
+      <div class="group primary" id="script-path-group">
+        <label>剧本文本 (推荐)
+          <input type="text" id="script-path" placeholder="/abs/path/to/EP01.txt 或 samples/v1/EP01.txt" />
+        </label>
+        <p class="hint" id="script-path-hint">直接粘贴绝对路径，或展开「上传剧本文本 (.txt)」选文件。</p>
+      </div>
+
+      <!-- P0A-2: run buttons always visible -->
+      <div class="button-row primary-actions">
+        <button type="button" id="run-btn">运行单集</button>
+        <button type="button" id="batch-btn" class="secondary">批量运行</button>
+      </div>
+
+      <!-- P0A-2: upload is a collapsed details (default closed) -->
+      <details class="group">
+        <summary>上传剧本文本 (.txt)</summary>
+        <label>上传剧本文本 (.txt)
+          <input type="file" id="upload-input" accept=".txt,text/plain" />
+        </label>
+        <p class="hint" id="upload-status">尚未上传文件。</p>
+      </details>
+
+      <!-- P0A-2 / P0A-4: output directory collapsed with preview node -->
+      <details class="group">
+        <summary>输出目录</summary>
+        <label>父目录（留空使用默认 ~/Library/Application Support/ShortDramaPlanner/runs）
+          <input type="text" id="out-dir" placeholder="/abs/path/to/parent" />
+        </label>
+        <p class="hint">实际输出目录 = <code><span id="out-dir-preview">默认子目录</span></code></p>
+      </details>
+
+      <!-- P0A-2: batch scripts directory collapsed (used by batch-btn only) -->
+      <details class="group">
+        <summary>批量剧本文本目录（仅批量模式用）</summary>
+        <label>批量剧本文本目录（可选）
+          <input type="text" id="batch-scripts-dir" placeholder="/path/to/scripts-dir" />
+        </label>
+      </details>
+
+      <!-- P0A-2: model settings collapsed as "Advanced" (P0A carve-out from c0cac53) -->
+      <details class="group">
+        <summary>高级：模型与 API key</summary>
+        <p class="hint">API 密钥从指定名称的环境变量读取，密钥值不会离开本机。第一次用可保持默认 deterministic（无需 API key）。</p>
         <label>Provider
           <select id="provider-select">
             <option value="deterministic">deterministic</option>
@@ -51,28 +94,6 @@
           <button type="button" id="probe-btn" class="secondary" disabled title="将在 v1.1 中提供 — opt-in 探测设计见 HANDOFF.md">探测 (v1.1)</button>
         </div>
         <p class="hint" id="model-config-status">模型配置尚未加载。</p>
-      </details>
-
-      <!-- Script selection -->
-      <details class="group" open>
-        <summary>剧本文本</summary>
-        <label>上传剧本文本 (.txt)
-          <input type="file" id="upload-input" accept=".txt,text/plain" />
-        </label>
-        <p class="hint" id="upload-status">尚未上传文件。</p>
-        <label>或选择一个已有剧本
-          <input type="text" id="script-path" placeholder="/absolute/path/to/script.txt" />
-        </label>
-        <label>输出目录（可选）
-          <input type="text" id="out-dir" placeholder="/tmp/storyboard-out" />
-        </label>
-        <label>批量剧本文本目录（可选）
-          <input type="text" id="batch-scripts-dir" placeholder="/path/to/scripts-dir" />
-        </label>
-        <div class="button-row">
-          <button type="button" id="run-btn">运行单集</button>
-          <button type="button" id="batch-btn" class="secondary">批量运行</button>
-        </div>
       </details>
     </section>
 

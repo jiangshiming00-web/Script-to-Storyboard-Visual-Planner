@@ -152,6 +152,29 @@ button:hover { opacity: 0.92; }
 
 .hint { color: var(--text-muted); font-size: 12px; margin: 4px 0; }
 
+/* P0A-2: first-screen primary input + run buttons + intro prompt.
+   The script-path input is the only always-visible script selector
+   (besides the run buttons). Upload / output / batch / model settings
+   all live in <details> default-closed. */
+.intro {
+  font-size: 13px;
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  background: var(--bg-row-hover);
+  border-radius: 6px;
+}
+.group.primary {
+  border: 1px solid var(--accent);
+  background: var(--bg-row-hover);
+  padding: 12px;
+}
+.group.primary label {
+  font-weight: 600;
+}
+.button-row.primary-actions {
+  margin: 12px 0;
+}
+
 /* Run list */
 .run-list {
   display: flex;
