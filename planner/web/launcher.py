@@ -143,8 +143,15 @@ def launch_server_only(
     app = create_app(repo_root=repo_root)
     _check_port_available(host, port)
     _log.info("planner-web: starting server at http://%s:%d", host, port)
+    # P0A-1 round-4 fix: print "starting" (not "ready") because the
+    # port isn't bound yet — server.run() is the next line and
+    # uvicorn binds during its own setup. The exact bind moment
+    # is racy to observe from a non-uvicorn signal, so we choose
+    # honesty over strict bind-then-print. Callers (e.g. smoke
+    # tests) should poll the port with a socket connect after
+    # seeing this banner.
     print(
-        f"planner-web ready → http://{host}:{port}/  (Ctrl-C to stop)",
+        f"planner-web starting → http://{host}:{port}/  (Ctrl-C to stop)",
         flush=True,
     )
     server = _build_server(app, host=host, port=port)
@@ -236,7 +243,8 @@ def launch_desktop(
     _log.info("planner-web: opening window at %s", url)
     # P0A-1: same headless banner the server-only mode prints, so
     # the operator knows where to point the browser (or where the
-    # window is hosting the app).
+    # window is hosting the app). Printed AFTER the ready event to
+    # match the actual bind state.
     print(
         f"planner-web ready → {url}  (close window to stop)",
         flush=True,

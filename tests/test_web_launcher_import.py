@@ -527,10 +527,12 @@ def test_serve_then_stop_releases_port(tmp_path: Path) -> None:
 
     try:
         # Wait for the headless banner in stdout (5s budget). The
-        # banner is printed before uvicorn binds (we trade strict
-        # "banner == bound" for clean SIGINT delivery through
-        # uvicorn's own signal handler), so we additionally sleep
-        # a short moment to let uvicorn finish binding.
+        # banner is "planner-web starting →" (printed before uvicorn
+        # binds — we trade strict "banner == bound" for clean SIGINT
+        # delivery through uvicorn's own signal handler), so we
+        # additionally sleep a short moment to let uvicorn finish
+        # binding. P0A-1 round-4 fix: text changed from "ready" to
+        # "starting" to be honest about bind state.
         banner_deadline = _time.time() + 5.0
         banner = ""
         while _time.time() < banner_deadline:
@@ -539,7 +541,7 @@ def test_serve_then_stop_releases_port(tmp_path: Path) -> None:
                 if proc.poll() is not None:
                     break
                 continue
-            if "planner-web ready" in line:
+            if "planner-web starting" in line:
                 banner = line
                 break
         assert banner, (
