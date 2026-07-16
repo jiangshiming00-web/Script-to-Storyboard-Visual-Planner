@@ -777,3 +777,55 @@ def test_post_batches_missing_scripts_dir_returns_error(app_with_repo) -> None:
     assert resp.status_code in (400, 403, 404), resp.text
     detail = resp.json()["detail"]
     assert "message" in detail
+
+
+# --- P0A-3: backend stable error shape contract -------------------------
+
+
+def test_web_api_returns_stable_error_shape_for_broken_reference(
+    app_with_repo, monkeypatch, project_root
+) -> None:
+    """P0A-3 contract: the backend returns the stable JSON shape
+    ``{error: <type>, message: <raw>}``; the frontend (app.js::
+    formatUserError) is what translates the type into a user-friendly
+    Chinese sentence.
+
+    This test pins the backend's responsibility: it MUST keep the
+    engineering-semantic type name and MUST NOT include any
+    frontend-friendly keyword in the raw message. A future refactor
+    that, say, returns ``{"error": "BadRequest", "message": "分镜..."}``
+    from the backend would break this contract and get caught here.
+    """
+
+    from unittest.mock import patch
+
+    from planner.exceptions import BrokenReferenceError
+
+    client, _repo = app_with_repo
+    sample = project_root / "data" / "development" / "input_scripts" / "sample_ep01.txt"
+    # Patch the service that create_app() already wired into app.state.
+    # No need to re-include the router (FastAPI would raise on double-mount).
+    with patch.object(
+        app_with_repo[0].app.state.run_service,
+        "start_run",
+        side_effect=BrokenReferenceError(
+            "shot EP01_SH001 references unknown location_id 'scene_default'"
+        ),
+    ):
+        resp = client.post(
+            "/api/runs",
+            json={"env": "development", "script_path": str(sample)},
+        )
+    assert resp.status_code == 500, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == "BrokenReferenceError"
+    # Raw engineering message is preserved verbatim
+    assert "scene_default" in detail["message"]
+    assert "EP01_SH001" in detail["message"]
+    # Backend MUST NOT include frontend-friendly keywords.
+    # (Those live in app.js::formatUserError — not in the API response.)
+    for forbidden in ("分镜", "建议", "检查", "重试", "切换"):
+        assert forbidden not in detail["message"], (
+            f"backend must not include frontend-friendly keyword "
+            f"{forbidden!r}; got detail.message={detail['message']!r}"
+        )
