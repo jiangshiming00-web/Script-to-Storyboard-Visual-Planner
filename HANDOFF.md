@@ -2,7 +2,7 @@
 
 ## 当前状态（2026-07-16 - Phase 3 P3 P0A landed：safe startup + first screen + errors + outdir + upload，等 Codex 手工复审 + push）
 
-按 Codex（用户手工对手方）round-3 verdict PASS + codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3，P1 必修 + P2 顺手补 + P3 选做），P0A 5 项全部落地（7 commit 拆开）。本地已 ahead origin/main 8 commits（`c0cac53` 翻译 commit + 7 P0A commits）；`git push` 在 Codex 复审 verdict PASS 后执行。
+按 Codex（用户手工对手方）round-3 verdict PASS + codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3，P1 必修 + P2 顺手补 + P3 选做），P0A 5 项全部落地（7 commit 拆开）。本地已 ahead origin/main 12 commits（`c0cac53` 翻译 commit + 7 P0A commits + 3 round-4 fix commits + 1 round-4 status row）；`git push` 在 Codex 复审 verdict PASS 后执行。
 
 ### P0A 落地清单（7 commit）
 
@@ -17,7 +17,7 @@
 
 ### 验证
 
-- `python3 -m pytest` —— **502 passed, 2 warnings in 30.17s**（473 baseline + 29 P0A 新增；0 回归）
+- `python3 -m pytest` —— **505 passed, 2 warnings in 29.22s**（473 baseline + 29 P0A 新增 + 3 round-4 chain integration 新增；0 回归）
 - `python3 -m json.tool PROJECT_STATUS.json` —— 通过
 - `git diff --check` —— clean
 - `runs/` —— 仅含根 `.gitkeep`
@@ -45,7 +45,7 @@
 
 ### Codex 手工复审重点（实施完成后由 Codex 拍板）
 
-1. P0A-1 默认 headless 行为：跑 `planner-web`（无 flag）→ 终端打 `planner-web ready → http://127.0.0.1:8765/  (Ctrl-C to stop)`；不弹 native window；切到另一个 Proma 项目对话键入文字不受干扰
+1. P0A-1 默认 headless 行为：跑 `planner-web`（无 flag）→ 终端打 `planner-web starting → http://127.0.0.1:8765/  (Ctrl-C to stop)`（round-4 fix：端口**尚未**bind，banner 文案诚实化为"starting"；callers 应在看到 banner 后用 `socket.connect` 试探端口）；不弹 native window；切到另一个 Proma 项目对话键入文字不受干扰
 2. P0A-1 `--window` 显式开窗 + `--no-window` deprecation warning 文案（**不指向 --window**）
 3. P0A-2 第一屏布局：intro 提示 + script-path (推荐) + 4 个 `<details>` 默认关闭
 4. P0A-2 carve-out：`高级：模型与 API key` 是唯一修改的 c0cac53 翻译字符串

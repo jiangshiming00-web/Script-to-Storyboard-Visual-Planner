@@ -14,7 +14,7 @@
   - `--no-window` 保留为 deprecation alias（stderr 一行 warning，**不指向 --window** per v3 round-2 cleanup）
   - `--help` 增 Safe Start / Safe Stop / 故障恢复 章节（`RawDescriptionHelpFormatter`）
 - **`planner/web/launcher.py`** (P0A-1)
-  - `launch_server_only` 启动后打印一行 headless banner 到 stdout：`planner-web ready → http://<host>:<port>/  (Ctrl-C to stop)`
+  - `launch_server_only` 启动后打印一行 headless banner 到 stdout：`planner-web starting → http://<host>:<port>/  (Ctrl-C to stop)`（round-4 fix：端口尚未 bind，banner 文案诚实化为 "starting"；`launch_desktop` 仍打 "ready" — 在 ready 事件触发后）
   - `launch_desktop` 同（开窗前打 URL，operator 知道访问地址）
   - `_signal_ready_when_started` 加 `stop_event` 参数：超时分支可主动停掉 ready-poll daemon（防御性，非 P0A 必用，但 P2 友好）
 - **`planner/web/static/index.html`** (P0A-2 / P0A-4)
