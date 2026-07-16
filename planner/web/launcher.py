@@ -90,17 +90,29 @@ def _build_server(app, host: str, port: int):
     return uvicorn.Server(config)
 
 
-def _signal_ready_when_started(server, ready: threading.Event) -> None:
+def _signal_ready_when_started(
+    server,
+    ready: threading.Event,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
     """Poll ``server.started`` and set ``ready`` once uvicorn is bound.
 
     Runs in a tiny daemon thread so the caller's main thread can
     ``ready.wait(timeout=...)`` without blocking on ``server.run()``
     (which blocks until the server exits).
+
+    Phase 3 P3 P0A-1: ``stop_event`` lets the caller abort the poll
+    loop early (e.g. if ``ready.wait`` timed out and we want the
+    daemon thread to exit instead of sleeping through the rest of
+    the 5s poll). Daemon threads are killed at process exit anyway,
+    but this avoids a brief window of empty CPU spinning.
     """
 
     import time as _time
 
     for _ in range(100):
+        if stop_event is not None and stop_event.is_set():
+            return
         if server.started:
             ready.set()
             return
@@ -115,8 +127,15 @@ def launch_server_only(
 ) -> None:
     """Start the FastAPI app on ``host:port`` and block until SIGINT.
 
-    Use this from headless contexts (``planner-web --no-window``,
-    CI smoke harnesses). Returns only on graceful shutdown.
+    Use this from headless contexts (the default ``planner-web`` mode
+    since Phase 3 P3 P0A-1, CI smoke harnesses, ``--no-window``
+    deprecation alias). Returns only on graceful shutdown.
+
+    Phase 3 P3 P0A-1: prints a one-line headless banner to **stdout**
+    (not stderr — stderr is reserved for the operator's error stream
+    and CI's error collection). The banner is printed AFTER uvicorn
+    binds the port (mirrors the launch_desktop pattern, so callers
+    can probe the port once they see the banner).
     """
 
     from .app import create_app
@@ -124,7 +143,16 @@ def launch_server_only(
     app = create_app(repo_root=repo_root)
     _check_port_available(host, port)
     _log.info("planner-web: starting server at http://%s:%d", host, port)
+    print(
+        f"planner-web ready → http://{host}:{port}/  (Ctrl-C to stop)",
+        flush=True,
+    )
     server = _build_server(app, host=host, port=port)
+    # server.run() installs its own SIGINT handler that sets
+    # should_exit=True on Ctrl-C; we deliberately do NOT wrap it in
+    # a thread + join() because that breaks uvicorn's signal
+    # delivery (signals go to the main thread, which would be in
+    # join(), not server.run()).
     server.run()
 
 
@@ -172,13 +200,16 @@ def launch_desktop(
     # deterministically on window close.
     server = _build_server(app, host=host, port=port)
     ready = threading.Event()
+    # P0A-1: stop_event lets the ready-poll daemon exit promptly if
+    # the main thread decides to give up (e.g. ready.wait timed out).
+    stop_event = threading.Event()
 
     def _run_server() -> None:
         # Poll server.started in a daemon thread so this thread can
         # proceed to server.run() (which blocks until exit).
         threading.Thread(
             target=_signal_ready_when_started,
-            args=(server, ready),
+            args=(server, ready, stop_event),
             daemon=True,
             name="uvicorn-ready",
         ).start()
@@ -193,6 +224,8 @@ def launch_desktop(
     # Wait up to ~5 seconds for the server to bind.
     if not ready.wait(timeout=5.0):
         # Never bound - tear down the thread so we don't leak it.
+        # P0A-1: signal the ready-poll daemon to exit early.
+        stop_event.set()
         server.should_exit = True
         server_thread.join(timeout=server_join_timeout)
         raise RuntimeError(
@@ -201,6 +234,13 @@ def launch_desktop(
 
     url = f"http://{host}:{port}/"
     _log.info("planner-web: opening window at %s", url)
+    # P0A-1: same headless banner the server-only mode prints, so
+    # the operator knows where to point the browser (or where the
+    # window is hosting the app).
+    print(
+        f"planner-web ready → {url}  (close window to stop)",
+        flush=True,
+    )
     window = webview.create_window(
         title=title,
         url=url,

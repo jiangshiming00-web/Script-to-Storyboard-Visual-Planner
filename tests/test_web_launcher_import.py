@@ -382,3 +382,229 @@ def test_launch_desktop_logs_warning_when_server_join_times_out(
     assert any(
         "did not exit" in r.message for r in caplog.records
     ), "expected a warning when the server thread outlives the join timeout"
+
+
+# ---- P0A-1: default headless + --window explicit + --no-window compat ----
+
+
+def test_default_mode_is_headless_not_window(monkeypatch) -> None:
+    """P0A-1: ``planner-web`` (no flags) MUST call ``launch_server_only``,
+    not ``launch_desktop``. The default was flipped in Phase 3 P3 to
+    avoid macOS focus stealing by the pywebview native window.
+    """
+
+    from planner.web import launcher, scripts_entry
+
+    called = {"server_only": 0, "desktop": 0}
+
+    def fake_server_only(*args, **kwargs):
+        called["server_only"] += 1
+        # Raise to break out of main() without actually starting a server.
+        raise SystemExit(0)
+
+    def fake_desktop(*args, **kwargs):
+        called["desktop"] += 1
+        raise AssertionError(
+            "launch_desktop must not be called in default (no-flag) mode"
+        )
+
+    # scripts_entry.main() does ``from .launcher import launch_*`` —
+    # patch the source module so the local import sees the fakes.
+    monkeypatch.setattr(launcher, "launch_server_only", fake_server_only)
+    monkeypatch.setattr(launcher, "launch_desktop", fake_desktop)
+
+    with pytest.raises(SystemExit):
+        scripts_entry.main([])
+
+    assert called["server_only"] == 1
+    assert called["desktop"] == 0
+
+
+def test_explicit_window_flag_opens_desktop(monkeypatch) -> None:
+    """P0A-1: ``planner-web --window`` MUST call ``launch_desktop`` and
+    NOT ``launch_server_only``. This is the explicit opt-in for the
+    native window.
+    """
+
+    from planner.web import launcher, scripts_entry
+
+    called = {"server_only": 0, "desktop": 0}
+
+    def fake_server_only(*args, **kwargs):
+        called["server_only"] += 1
+        raise AssertionError(
+            "launch_server_only must not be called when --window is passed"
+        )
+
+    def fake_desktop(*args, **kwargs):
+        called["desktop"] += 1
+        raise SystemExit(0)
+
+    monkeypatch.setattr(launcher, "launch_server_only", fake_server_only)
+    monkeypatch.setattr(launcher, "launch_desktop", fake_desktop)
+
+    with pytest.raises(SystemExit):
+        scripts_entry.main(["--window"])
+
+    assert called["desktop"] == 1
+    assert called["server_only"] == 0
+
+
+def test_no_window_deprecation_warning(monkeypatch, capsys) -> None:
+    """P0A-1: ``planner-web --no-window`` is a deprecation alias. It
+    must still work (headless) and emit a one-line stderr warning.
+    The warning text MUST NOT point to --window (v3 round-2 cleanup):
+    pointing to --window would mislead the user into thinking the
+    default opens a window, which it does not.
+    """
+
+    from planner.web import launcher, scripts_entry
+
+    def fake_server_only(*args, **kwargs):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(launcher, "launch_server_only", fake_server_only)
+
+    with pytest.raises(SystemExit):
+        scripts_entry.main(["--no-window"])
+
+    captured = capsys.readouterr()
+    # Warning text contains "已不需要" (per brief)
+    assert "已不需要" in captured.err
+    # Must NOT point to --window
+    assert "--window" not in captured.err
+
+
+def test_serve_then_stop_releases_port(tmp_path: Path) -> None:
+    """P0A-1: ``planner-web`` (default headless) starts on a free port,
+    prints the headless banner, and exits cleanly on SIGINT — releasing
+    the port within a few seconds.
+
+    Approach: spawn the actual ``python -m planner.web`` subprocess on
+    a free port; poll for the headless banner in stdout; give uvicorn
+    a moment to actually bind; send SIGINT; wait for the process to
+    exit; then probe the port via ``socket.connect`` — it MUST raise
+    ``ConnectionRefusedError`` / ``OSError`` (port free).
+    """
+
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+
+    import os as _os
+    import signal as _signal
+    import socket as _socket
+    import subprocess as _subprocess
+    import sys as _sys
+    import time as _time
+
+    # Pick a free port
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    # Build a minimal repo so /api/config can resolve
+    repo = tmp_path / "fake_repo"
+    repo.mkdir()
+    (repo / "config").mkdir()
+    (repo / "config" / "development.json").write_text(
+        '{"env":"development","planner_provider":"deterministic"}',
+        encoding="utf-8",
+    )
+
+    env = {
+        **_os.environ,
+        # Strip PLANNER_* so we don't leak the host's config
+        **{k: v for k, v in _os.environ.items() if not k.startswith("PLANNER_")},
+    }
+
+    proc = _subprocess.Popen(
+        [_sys.executable, "-m", "planner.web", "--port", str(port), "--repo-root", str(repo)],
+        stdout=_subprocess.PIPE,
+        stderr=_subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+
+    try:
+        # Wait for the headless banner in stdout (5s budget). The
+        # banner is printed before uvicorn binds (we trade strict
+        # "banner == bound" for clean SIGINT delivery through
+        # uvicorn's own signal handler), so we additionally sleep
+        # a short moment to let uvicorn finish binding.
+        banner_deadline = _time.time() + 5.0
+        banner = ""
+        while _time.time() < banner_deadline:
+            line = proc.stdout.readline() if proc.stdout else ""
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            if "planner-web ready" in line:
+                banner = line
+                break
+        assert banner, (
+            f"headless banner not seen within 5s; "
+            f"proc.poll={proc.poll()}; stderr={proc.stderr.read() if proc.stderr else ''}"
+        )
+
+        # Give uvicorn a moment to actually bind the port. The banner
+        # is printed just before server.run() is invoked, so there's
+        # a small window where the port isn't bound yet.
+        bound = False
+        bind_deadline = _time.time() + 5.0
+        while _time.time() < bind_deadline:
+            try:
+                with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.2)
+                    probe.connect(("127.0.0.1", port))
+                bound = True
+                break
+            except OSError:
+                if proc.poll() is not None:
+                    break
+                _time.sleep(0.05)
+        assert bound, (
+            f"server did not bind port {port} within 5s of banner; "
+            f"proc.poll={proc.poll()}"
+        )
+
+        # Send SIGINT and wait for graceful exit
+        proc.send_signal(_signal.SIGINT)
+        try:
+            proc.wait(timeout=5.0)
+        except _subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2.0)
+            pytest.fail(
+                f"planner-web did not exit within 5s of SIGINT; "
+                f"stderr={proc.stderr.read() if proc.stderr else ''}"
+            )
+
+        assert proc.returncode == 0, (
+            f"planner-web exited with {proc.returncode}; "
+            f"stderr={proc.stderr.read() if proc.stderr else ''}"
+        )
+
+        # Probe port: must be free (raise OSError). Note: SO_REUSEADDR
+        # semantics can briefly keep a port reserved; we retry briefly.
+        released = False
+        release_deadline = _time.time() + 3.0
+        last_err: Exception | None = None
+        while _time.time() < release_deadline:
+            try:
+                with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.2)
+                    probe.connect(("127.0.0.1", port))
+                # Port still bound — wait and retry
+            except OSError as exc:
+                released = True
+                last_err = exc
+                break
+            _time.sleep(0.1)
+        assert released, (
+            f"port {port} still bound 3s after planner-web exit; last_err={last_err}"
+        )
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2.0)
