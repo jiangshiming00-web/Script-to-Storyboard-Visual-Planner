@@ -2,7 +2,7 @@
 
 ## 当前状态（2026-07-16 - Phase 3 P3 P0A landed：safe startup + first screen + errors + outdir + upload，等 Codex 手工复审 + push）
 
-按 Codex（用户手工对手方）round-3 verdict PASS + codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3，P1 必修 + P2 顺手补 + P3 选做），P0A 5 项全部落地（7 commit 拆开）。本地已 ahead origin/main 6 commits（含 c0cac53 翻译 commit）；`git push` 在 Codex 复审 verdict PASS 后执行。
+按 Codex（用户手工对手方）round-3 verdict PASS + codex-review 子会话预审 verdict NEEDS_FIX（1 P1 + 4 P2 + 4 P3，P1 必修 + P2 顺手补 + P3 选做），P0A 5 项全部落地（7 commit 拆开）。本地已 ahead origin/main 8 commits（`c0cac53` 翻译 commit + 7 P0A commits）；`git push` 在 Codex 复审 verdict PASS 后执行。
 
 ### P0A 落地清单（7 commit）
 
@@ -54,7 +54,7 @@
 7. P0A-5 upload 校验：拖 .mov → toast 显"上传失败：仅支持 .txt 文件..."；拖 11MB → toast 显"文件过大：..."
 8. c0cac53 翻译字符串全部保留（除上述 1 处 carve-out）
 9. 红线守门：production 不写仓内；production upload 走 app-data；production 不 silent fallback
-10. `git push` 前确认本地 6 commits 都已通过 review
+10. `git push` 前确认本地 8 commits（`c0cac53` 翻译 + 7 P0A）都已通过 review
 
 ### 给下一轮接手的 AI（Step 7 启动 P0B 时读）
 
